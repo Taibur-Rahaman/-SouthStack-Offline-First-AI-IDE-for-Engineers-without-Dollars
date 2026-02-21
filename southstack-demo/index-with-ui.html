@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SouthStack - Coding LLM (Frontend)</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+      color: #007AFF;
+    }
+    .subtitle {
+      color: #888;
+      font-size: 13px;
+      margin-bottom: 24px;
+    }
+    .status {
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+    .status.loading { background: rgba(0, 122, 255, 0.2); color: #007AFF; }
+    .status.ready { background: rgba(52, 199, 89, 0.2); color: #34c759; }
+    .status.error { background: rgba(255, 59, 48, 0.2); color: #ff3b30; }
+    .prompt-section {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+    #promptInput {
+      width: 100%;
+      min-height: 80px;
+      padding: 14px;
+      font-size: 14px;
+      font-family: inherit;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #2a2a2a;
+      color: #e0e0e0;
+      resize: vertical;
+    }
+    #promptInput:focus {
+      outline: none;
+      border-color: #007AFF;
+    }
+    #askBtn {
+      background: #007AFF;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    #askBtn:hover:not(:disabled) {
+      background: #0051D5;
+    }
+    #askBtn:disabled {
+      background: #555;
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+    .output-section {
+      margin-top: 24px;
+    }
+    #output {
+      width: 100%;
+      min-height: 200px;
+      padding: 16px;
+      font-size: 13px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #0d0d0d;
+      color: #0f0;
+    }
+    #output.placeholder {
+      color: #666;
+    }
+    .loading-dots::after {
+      content: '';
+      animation: dots 1.5s infinite;
+    }
+    @keyframes dots {
+      0%, 20% { content: '.'; }
+      40% { content: '..'; }
+      60%, 100% { content: '...'; }
+    }
+  </style>
+</head>
+<body>
+  <h1>SouthStack – Coding LLM</h1>
+  <p class="subtitle">Offline-first · No API key · Response shown below</p>
+
+  <div id="modelStatus" class="status loading">Checking WebGPU and loading model...</div>
+
+  <div class="prompt-section">
+    <label for="promptInput">Prompt</label>
+    <textarea id="promptInput" placeholder="e.g. Write a simple Express server"></textarea>
+    <button id="askBtn" disabled>Ask</button>
+  </div>
+
+  <div class="output-section">
+    <label>Response (shown in frontend)</label>
+    <pre id="output" class="placeholder">Response will appear here. Wait for "Model ready" then type a prompt and click Ask.</pre>
+  </div>
+
+  <script type="module">
+    import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+
+    const CONFIG = {
+      primaryModel: 'Qwen2.5-Coder-1.5B-Instruct-q4f32_1',
+      fallbackModel: 'Qwen2.5-Coder-0.5B-Instruct-q4f32_1',
+      maxTokens: 512,
+      temperature: 0.2
+    };
+
+    let engine = null;
+    let isReady = false;
+
+    const modelStatusEl = document.getElementById('modelStatus');
+    const promptInput = document.getElementById('promptInput');
+    const askBtn = document.getElementById('askBtn');
+    const outputEl = document.getElementById('output');
+
+    function setStatus(msg, type = 'loading') {
+      modelStatusEl.textContent = msg;
+      modelStatusEl.className = 'status ' + type;
+    }
+
+    async function init() {
+      if (!navigator.gpu) {
+        setStatus('WebGPU not supported. Enable in chrome://flags/#enable-unsafe-webgpu', 'error');
+        return;
+      }
+      setStatus('Loading model (first time may take a few minutes)...', 'loading');
+      try {
+        engine = await webllm.CreateMLCEngine(CONFIG.primaryModel, {
+          initProgressCallback: (p) => {
+            if (p && p.progress !== undefined) {
+              const percent = Math.round(p.progress * 100);
+              setStatus('Loading model: ' + percent + '%', 'loading');
+            } else if (p && p.text) {
+              setStatus(p.text, 'loading');
+            }
+          }
+        });
+        isReady = true;
+        setStatus('Model ready. Type a prompt and click Ask.', 'ready');
+        askBtn.disabled = false;
+        window.ask = ask;
+      } catch (e) {
+        setStatus('Failed: ' + e.message, 'error');
+        try {
+          setStatus('Trying fallback model...', 'loading');
+          engine = await webllm.CreateMLCEngine(CONFIG.fallbackModel, {
+            initProgressCallback: (p) => {
+              if (p && p.text) setStatus(p.text, 'loading');
+            }
+          });
+          isReady = true;
+          setStatus('Model ready (fallback). Type a prompt and click Ask.', 'ready');
+          askBtn.disabled = false;
+          window.ask = ask;
+        } catch (e2) {
+          setStatus('Fallback failed: ' + e2.message, 'error');
+        }
+      }
+    }
+
+    async function ask(prompt) {
+      if (!engine) {
+        outputEl.textContent = 'Model not ready yet. Wait for "Model ready."';
+        outputEl.classList.add('placeholder');
+        return;
+      }
+      const text = typeof prompt === 'string' ? prompt : (promptInput && promptInput.value);
+      if (!text || !text.trim()) {
+        outputEl.textContent = 'Enter a prompt first.';
+        outputEl.classList.add('placeholder');
+        return;
+      }
+      outputEl.classList.remove('placeholder');
+      outputEl.textContent = 'Generating...';
+      askBtn.disabled = true;
+      try {
+        const reply = await engine.chat.completions.create({
+          messages: [{ role: 'user', content: text }],
+          temperature: CONFIG.temperature,
+          max_tokens: CONFIG.maxTokens
+        });
+        const response = reply.choices[0].message.content;
+        outputEl.textContent = response || '(No output)';
+      } catch (e) {
+        outputEl.textContent = 'Error: ' + e.message;
+      }
+      askBtn.disabled = false;
+    }
+
+    askBtn.addEventListener('click', () => ask());
+    promptInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        ask();
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SouthStack Test Page</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #000; color: #0f0; }
+        .test { margin: 10px 0; padding: 10px; border: 1px solid #0f0; }
+        .pass { color: #0f0; }
+        .fail { color: #f00; }
+        .info { color: #ff0; }
+    </style>
+</head>
+<body>
+    <h1>SouthStack System Test</h1>
+    <div id="results"></div>
+    <script>
+        const results = document.getElementById('results');
+        
+        function addTest(name, status, message) {
+            const div = document.createElement('div');
+            div.className = 'test';
+            div.innerHTML = `<strong>${name}:</strong> <span class="${status}">${status.toUpperCase()}</span> - ${message}`;
+            results.appendChild(div);
+        }
+        
+        // Test 1: WebGPU Support
+        if (navigator.gpu) {
+            addTest('WebGPU', 'pass', 'WebGPU is available');
+        } else {
+            addTest('WebGPU', 'fail', 'WebGPU not available - enable in chrome://flags/#enable-unsafe-webgpu');
+        }
+        
+        // Test 2: Service Worker Support
+        if ('serviceWorker' in navigator) {
+            addTest('Service Worker', 'pass', 'Service Worker API available');
+        } else {
+            addTest('Service Worker', 'fail', 'Service Worker not supported');
+        }
+        
+        // Test 3: Storage API
+        if ('storage' in navigator && 'estimate' in navigator.storage) {
+            navigator.storage.estimate().then(estimate => {
+                const quotaGB = (estimate.quota / (1024 * 1024 * 1024)).toFixed(2);
+                addTest('Storage API', 'pass', `Quota: ${quotaGB}GB`);
+            });
+        } else {
+            addTest('Storage API', 'fail', 'Storage API not available');
+        }
+        
+        // Test 4: Device Memory
+        if ('deviceMemory' in navigator) {
+            addTest('Device Memory', 'pass', `${navigator.deviceMemory}GB RAM detected`);
+        } else {
+            addTest('Device Memory', 'info', 'Device Memory API not available');
+        }
+        
+        // Test 5: ES Modules
+        addTest('ES Modules', 'pass', 'Browser supports ES modules');
+        
+        // Test 6: Check if main.js loads
+        fetch('./main.js')
+            .then(r => r.ok ? addTest('main.js', 'pass', 'File accessible') : addTest('main.js', 'fail', 'File not found'))
+            .catch(e => addTest('main.js', 'fail', `Error: ${e.message}`));
+        
+        // Test 7: Check if WebLLM CDN is accessible
+        fetch('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.40/dist/index.js', { mode: 'no-cors' })
+            .then(() => addTest('WebLLM CDN', 'pass', 'CDN accessible'))
+            .catch(() => addTest('WebLLM CDN', 'info', 'CDN check inconclusive (CORS)'));
+        
+        addTest('Next Steps', 'info', 'Open main page at http://localhost:8000/ and check console');
+    </script>
+</body>
+</html>

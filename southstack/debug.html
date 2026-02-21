@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SouthStack Debug</title>
+    <style>
+        body { 
+            background: #000; 
+            color: #0f0; 
+            font-family: monospace; 
+            padding: 20px; 
+        }
+        .test { margin: 10px 0; padding: 10px; border: 1px solid #0f0; }
+        .pass { color: #0f0; }
+        .fail { color: #f00; }
+    </style>
+</head>
+<body>
+    <h1>SouthStack Debug Page</h1>
+    <div class="test">
+        <strong>If you see this text, HTML is loading correctly.</strong>
+    </div>
+    <div class="test">
+        <strong>If background is black and text is green, CSS is working.</strong>
+    </div>
+    <div class="test" id="js-test">
+        <strong>JavaScript test: </strong><span id="js-result">Testing...</span>
+    </div>
+    <div class="test">
+        <strong>WebGPU: </strong><span id="webgpu-result">Checking...</span>
+    </div>
+    <div class="test">
+        <strong>Service Worker: </strong><span id="sw-result">Checking...</span>
+    </div>
+    <div class="test">
+        <strong>Module Import Test:</strong>
+        <pre id="module-test">Testing...</pre>
+    </div>
+    
+    <script>
+        // Test JavaScript
+        document.getElementById('js-result').textContent = '✅ JavaScript is working';
+        document.getElementById('js-result').className = 'pass';
+        
+        // Test WebGPU
+        if (navigator.gpu) {
+            document.getElementById('webgpu-result').textContent = '✅ Available';
+            document.getElementById('webgpu-result').className = 'pass';
+        } else {
+            document.getElementById('webgpu-result').textContent = '❌ Not available';
+            document.getElementById('webgpu-result').className = 'fail';
+        }
+        
+        // Test Service Worker
+        if ('serviceWorker' in navigator) {
+            document.getElementById('sw-result').textContent = '✅ Supported';
+            document.getElementById('sw-result').className = 'pass';
+        } else {
+            document.getElementById('sw-result').textContent = '❌ Not supported';
+            document.getElementById('sw-result').className = 'fail';
+        }
+        
+        // Test module import
+        async function testModuleImport() {
+            try {
+                const module = await import('./main.js');
+                document.getElementById('module-test').textContent = '✅ Module loaded successfully';
+                document.getElementById('module-test').className = 'pass';
+            } catch (error) {
+                document.getElementById('module-test').textContent = '❌ Error: ' + error.message;
+                document.getElementById('module-test').className = 'fail';
+                console.error('Module import error:', error);
+            }
+        }
+        
+        testModuleImport();
+        
+        console.log('Debug page loaded. Check console for errors.');
+    </script>
+</body>
+</html>
