@@ -11,6 +11,8 @@ const STATIC_ASSETS = [
     './',
     './index.html',
     './main.js',
+    './p2p.js',
+    './state.js',
     './manifest.json',
     'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.80/lib/index.js'
 ];

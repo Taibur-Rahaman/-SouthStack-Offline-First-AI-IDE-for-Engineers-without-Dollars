@@ -4,6 +4,9 @@
  * Uses WebLLM from MLC AI
  */
 
+import { P2PMesh } from "./p2p.js";
+import { newTaskState, loadTask, saveTask, appendToken, checkpoint } from "./state.js";
+
 const CONFIG = {
     // Use WebLLM prebuilt model IDs (must match prebuiltAppConfig.model_list)
     primaryModel: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
@@ -18,6 +21,117 @@ let webllm = null;
 let currentModel = null;
 let isModelLoaded = false;
 let engine = null;
+
+// Fault-tolerant P2P demo state
+const FT = {
+    peerId: null,
+    mesh: null,
+    connected: false,
+    remotePeerId: null,
+    leaderId: null,
+    lastHeartbeatByPeer: new Map(),
+    currentTaskId: null,
+    isGenerating: false,
+    generationAbort: { aborted: false },
+};
+
+function randId(prefix) {
+    const r = Math.random().toString(16).slice(2, 10);
+    return `${prefix}_${r}`;
+}
+
+function setText(id, txt) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = txt;
+}
+
+function isLeader() {
+    return !!FT.peerId && FT.leaderId === FT.peerId;
+}
+
+function updateFTUI() {
+    setText("peerIdStatus", FT.peerId || "—");
+    setText("p2pStatus", FT.connected ? `Connected to ${FT.remotePeerId || "peer"}` : "Not connected");
+    setText("leaderStatus", FT.leaderId ? (isLeader() ? `Leader (${FT.leaderId})` : `Follower (${FT.leaderId})`) : "—");
+}
+
+function electLeader() {
+    // Deterministic: lowest lexical peerId among currently alive peers.
+    const alive = new Set([FT.peerId]);
+    for (const [pid, ts] of FT.lastHeartbeatByPeer.entries()) {
+        if (Date.now() - ts < 3500) alive.add(pid);
+    }
+    const ids = Array.from(alive).filter(Boolean).sort();
+    FT.leaderId = ids[0] || FT.peerId;
+    updateFTUI();
+}
+
+function broadcast(msg) {
+    if (!FT.mesh) return false;
+    return FT.mesh.send(msg);
+}
+
+async function sendSnapshot(taskId) {
+    const st = await loadTask(taskId);
+    if (!st) return;
+    broadcast({ type: "snapshot", taskId, state: st, from: FT.peerId, t: Date.now() });
+}
+
+async function applyIncomingSnapshot(state) {
+    if (!state || !state.taskId) return;
+    const local = await loadTask(state.taskId);
+    // Last-write-wins by seq then updatedAt.
+    if (!local || (state.seq || 0) > (local.seq || 0) || (state.updatedAt || 0) > (local.updatedAt || 0)) {
+        await saveTask(state);
+    }
+}
+
+async function handleFTMessage(msg) {
+    if (!msg || !msg.type) return;
+    if (msg.from) FT.lastHeartbeatByPeer.set(msg.from, Date.now());
+    if (msg.type === "heartbeat") {
+        // Heartbeats drive leader election.
+        electLeader();
+        return;
+    }
+    if (msg.type === "snapshot") {
+        await applyIncomingSnapshot(msg.state);
+        if (msg.state?.leaderId) FT.leaderId = msg.state.leaderId;
+        if (msg.taskId) FT.currentTaskId = msg.taskId;
+        updateFTUI();
+        return;
+    }
+    if (msg.type === "token" && msg.taskId && typeof msg.token === "string") {
+        await appendToken(msg.taskId, msg.token);
+        FT.currentTaskId = msg.taskId;
+        // Followers can update UI response box in near-real-time.
+        const box = document.getElementById('responseBox');
+        if (box && (!FT.isGenerating || !isLeader())) {
+            const st = await loadTask(msg.taskId);
+            if (st) {
+                box.textContent = st.partialOutput || '';
+                box.classList.remove('empty');
+            }
+        }
+        return;
+    }
+    if (msg.type === "checkpoint" && msg.taskId) {
+        const st = await loadTask(msg.taskId);
+        if (!st) return;
+        if (msg.leaderId !== undefined) st.leaderId = msg.leaderId;
+        if (msg.status) st.status = msg.status;
+        if (typeof msg.seq === "number") st.seq = Math.max(st.seq || 0, msg.seq);
+        if (typeof msg.partialOutput === "string" && msg.partialOutput.length >= (st.partialOutput || "").length) {
+            st.partialOutput = msg.partialOutput;
+        }
+        st.lastCheckpointAt = Date.now();
+        await saveTask(st);
+        FT.currentTaskId = msg.taskId;
+        FT.leaderId = st.leaderId || FT.leaderId;
+        updateFTUI();
+        return;
+    }
+}
 
 function printBanner() {
     console.log('============================================================');
@@ -172,11 +286,104 @@ async function ensureInitialized() {
     return engine;
 }
 
+async function startFaultTolerantAsk(prompt) {
+    // Create or load a task, then either generate (leader) or follow (follower).
+    const taskId = FT.currentTaskId || randId("task");
+    FT.currentTaskId = taskId;
+    let st = await loadTask(taskId);
+    if (!st) {
+        st = newTaskState({ taskId, prompt, peerId: FT.leaderId || FT.peerId });
+        st.leaderId = FT.leaderId || FT.peerId;
+        await saveTask(st);
+        await checkpoint(taskId, { leaderId: st.leaderId });
+        broadcast({ type: "checkpoint", taskId, leaderId: st.leaderId, status: st.status, seq: st.seq, partialOutput: st.partialOutput, from: FT.peerId, t: Date.now() });
+    }
+    // Ensure followers know the snapshot quickly.
+    await sendSnapshot(taskId);
+
+    // If we are not leader, just return current partial output (it will update via replication).
+    if (!isLeader()) {
+        return (st.partialOutput || "");
+    }
+    // Leader generates (with periodic checkpoints + token broadcast).
+    return await generateAsLeader(taskId);
+}
+
+async function generateAsLeader(taskId) {
+    const st = await loadTask(taskId);
+    if (!st) throw new Error("Task state missing");
+    const eng = await ensureInitialized();
+    FT.isGenerating = true;
+    FT.generationAbort = { aborted: false };
+    updateFTUI();
+
+    const basePrompt = st.prompt || "";
+    const partial = st.partialOutput || "";
+    const continuationPrompt = partial ? `${basePrompt}\n\n(Continue exactly from this partial response, without repeating:)\n${partial}` : basePrompt;
+
+    const box = document.getElementById('responseBox');
+    if (box) {
+        box.textContent = partial || '';
+        box.classList.remove('empty');
+        box.classList.add('streaming');
+    }
+
+    let lastCk = Date.now();
+    try {
+        // Announce leadership for this task.
+        await checkpoint(taskId, { leaderId: FT.leaderId, status: "in_progress" });
+        broadcast({ type: "checkpoint", taskId, leaderId: FT.leaderId, status: "in_progress", from: FT.peerId, t: Date.now() });
+
+        const stream = await eng.chat.completions.create({
+            messages: [{ role: 'user', content: continuationPrompt }],
+            max_tokens: CONFIG.maxTokens,
+            temperature: CONFIG.temperature,
+            stream: true
+        });
+        for await (const chunk of stream) {
+            if (FT.generationAbort.aborted) break;
+            // If we lost leadership, stop and let new leader continue.
+            if (!isLeader()) break;
+            const txt = chunk.choices[0]?.delta?.content || '';
+            if (!txt) continue;
+            const next = await appendToken(taskId, txt);
+            broadcast({ type: "token", taskId, token: txt, seq: next?.seq, from: FT.peerId, t: Date.now() });
+            if (box) box.textContent = next?.partialOutput || '';
+
+            if (Date.now() - lastCk > 1500) {
+                lastCk = Date.now();
+                const ck = await checkpoint(taskId, { leaderId: FT.leaderId, status: "in_progress" });
+                broadcast({ type: "checkpoint", taskId, leaderId: ck?.leaderId, status: ck?.status, seq: ck?.seq, partialOutput: ck?.partialOutput, from: FT.peerId, t: Date.now() });
+            }
+        }
+        // If we lost leadership mid-stream, leave task as in_progress so the new leader resumes.
+        const finalStatus = isLeader() ? "done" : "in_progress";
+        const done = await checkpoint(taskId, { leaderId: FT.leaderId, status: finalStatus });
+        broadcast({ type: "checkpoint", taskId, leaderId: done?.leaderId, status: done?.status, seq: done?.seq, partialOutput: done?.partialOutput, from: FT.peerId, t: Date.now() });
+        if (box) box.classList.remove('streaming');
+        FT.isGenerating = false;
+        return done?.partialOutput || "";
+    } catch (e) {
+        await checkpoint(taskId, { leaderId: FT.leaderId, status: "error" });
+        broadcast({ type: "checkpoint", taskId, leaderId: FT.leaderId, status: "error", from: FT.peerId, t: Date.now() });
+        if (box) box.classList.remove('streaming');
+        FT.isGenerating = false;
+        throw e;
+    } finally {
+        FT.isGenerating = false;
+        updateFTUI();
+    }
+}
+
 window.ask = async function(prompt) {
     console.log('\n=== Prompt ===');
     console.log(prompt);
     console.log('==============');
     try {
+        // If P2P FT is active, route through it. Otherwise behave like the original single-node ask.
+        if (FT.mesh) {
+            return await startFaultTolerantAsk(prompt);
+        }
         const eng = await ensureInitialized();
         console.log('Generating...');
         let full = '';
@@ -222,6 +429,86 @@ window.SouthStack = {
     })
 };
 
+function setupFaultTolerance() {
+    // Stable-ish peerId for a tab session.
+    FT.peerId = randId("peer");
+    FT.leaderId = FT.peerId;
+
+    FT.mesh = new P2PMesh({
+        peerId: FT.peerId,
+        onMessage: (msg) => handleFTMessage(msg),
+        onPeerChange: (s) => {
+            FT.connected = !!s.connected;
+            FT.remotePeerId = s.remotePeerId || null;
+            updateFTUI();
+            // On connect, exchange snapshots.
+            if (FT.connected && FT.currentTaskId) {
+                sendSnapshot(FT.currentTaskId);
+            }
+        }
+    });
+
+    // Heartbeats.
+    setInterval(() => {
+        // Update our own liveness.
+        FT.lastHeartbeatByPeer.set(FT.peerId, Date.now());
+        broadcast({ type: "heartbeat", from: FT.peerId, leaderId: FT.leaderId, t: Date.now() });
+        electLeader();
+
+        // If we became leader while a task is in progress and we're not generating, try to resume.
+        if (isLeader() && FT.currentTaskId && !FT.isGenerating) {
+            loadTask(FT.currentTaskId).then((st) => {
+                if (!st) return;
+                if (st.status === "in_progress") {
+                    generateAsLeader(FT.currentTaskId).catch(() => {});
+                }
+            }).catch(() => {});
+        }
+    }, 1200);
+
+    updateFTUI();
+}
+
+// UI glue for the copy/paste signaling panel.
+window.SouthStackFT_UI = {
+    async createOffer() {
+        try {
+            const offer = await FT.mesh.createOffer();
+            const out = document.getElementById("localSignal");
+            if (out) out.value = JSON.stringify(offer);
+        } catch (e) {
+            console.error("Create offer failed:", e);
+        }
+    },
+    async acceptOffer() {
+        try {
+            const inp = document.getElementById("remoteSignal");
+            const obj = inp ? JSON.parse(inp.value || "{}") : null;
+            await FT.mesh.setRemoteOffer(obj);
+            const answer = await FT.mesh.createAnswer();
+            const out = document.getElementById("localSignal");
+            if (out) out.value = JSON.stringify(answer);
+        } catch (e) {
+            console.error("Accept offer failed:", e);
+        }
+    },
+    async setAnswer() {
+        try {
+            const inp = document.getElementById("remoteSignal");
+            const obj = inp ? JSON.parse(inp.value || "{}") : null;
+            await FT.mesh.setRemoteAnswer(obj);
+        } catch (e) {
+            console.error("Set answer failed:", e);
+        }
+    },
+    disconnect() {
+        try {
+            FT.mesh.disconnect();
+        } catch {}
+        updateFTUI();
+    }
+};
+
 function detectBrowser() {
     const ua = navigator.userAgent;
     let b = 'Unknown';
@@ -234,6 +521,7 @@ function detectBrowser() {
 async function init() {
     console.log('SouthStack initializing...');
     detectBrowser();
+    setupFaultTolerance();
     const hasGPU = await checkWebGPUSupport();
     await checkRAM();
     await checkStorageQuota();

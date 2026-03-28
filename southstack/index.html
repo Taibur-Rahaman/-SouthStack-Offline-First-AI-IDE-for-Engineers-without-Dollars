@@ -444,6 +444,45 @@
                     </div>
                 </div>
             </div>
+
+            <!-- P2P Fault-Tolerant Demo Card -->
+            <div class="card">
+                <h3>🔗 P2P Fault Tolerance</h3>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <span class="status-label">Peer ID</span>
+                        <span class="status-value" id="peerIdStatus">—</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Role</span>
+                        <span class="status-value" id="leaderStatus">—</span>
+                    </div>
+                    <div class="status-item" style="grid-column: 1 / -1;">
+                        <span class="status-label">P2P Link</span>
+                        <span class="status-value" id="p2pStatus">Not connected</span>
+                    </div>
+                </div>
+                <div class="divider"></div>
+                <div class="info-text">
+                    Copy/paste signaling (no server). On connect, tokens + checkpoints replicate so if the leader tab closes, the other peer can continue.
+                </div>
+                <div style="margin-top: 10px;">
+                    <div style="display:flex; gap:10px; flex-wrap: wrap;">
+                        <button id="createOfferBtn" onclick="SouthStackFT_UI.createOffer()">Create Offer</button>
+                        <button id="acceptOfferBtn" onclick="SouthStackFT_UI.acceptOffer()">Accept Offer</button>
+                        <button id="setAnswerBtn" onclick="SouthStackFT_UI.setAnswer()">Set Answer</button>
+                        <button id="disconnectBtn" onclick="SouthStackFT_UI.disconnect()">Disconnect</button>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <div style="color:#888;font-size:11px;margin-bottom:6px;">Local Signal (share this)</div>
+                        <textarea id="localSignal" style="width:100%;min-height:80px;padding:12px;background:rgba(0,0,0,0.4);border:1px solid rgba(0,122,255,0.3);border-radius:8px;color:#e0e0e0;font-family:'Monaco',monospace;font-size:11px;resize:vertical;" placeholder="Click Create Offer or Accept Offer, then copy from here."></textarea>
+                    </div>
+                    <div style="margin-top: 10px;">
+                        <div style="color:#888;font-size:11px;margin-bottom:6px;">Remote Signal (paste here)</div>
+                        <textarea id="remoteSignal" style="width:100%;min-height:80px;padding:12px;background:rgba(0,0,0,0.4);border:1px solid rgba(0,122,255,0.3);border-radius:8px;color:#e0e0e0;font-family:'Monaco',monospace;font-size:11px;resize:vertical;" placeholder="Paste the other peer's Offer/Answer JSON here."></textarea>
+                    </div>
+                </div>
+            </div>
             
             <!-- Model Status Card -->
             <div class="card">
@@ -604,7 +643,8 @@
             const box = document.getElementById('responseBox');
             const statusEl = document.getElementById('askStatus');
             if (!input || !box) return;
-            if (typeof window.ask !== 'function') {
+            const askFn = (typeof window.askFT === 'function') ? window.askFT : window.ask;
+            if (typeof askFn !== 'function') {
                 updateConsoleOutput('⚠️ Model not ready. Wait for model to load.', 'warn');
                 if (statusEl) statusEl.textContent = 'Model not ready.';
                 return;
@@ -619,7 +659,7 @@
             box.classList.add('streaming');
             if (statusEl) statusEl.textContent = 'Running (see console too)...';
             document.getElementById('askBtn').disabled = true;
-            window.ask(prompt).then((response) => {
+            askFn(prompt).then((response) => {
                 box.textContent = response || '(empty response)';
                 box.classList.remove('streaming');
                 if (statusEl) statusEl.textContent = 'Done. Check console (F12) for full output.';
@@ -634,7 +674,8 @@
 
         // Helper functions for UI
         function testModel() {
-            if (typeof window.ask !== 'function') {
+            const askFn = (typeof window.askFT === 'function') ? window.askFT : window.ask;
+            if (typeof askFn !== 'function') {
                 updateConsoleOutput('⚠️ Model not ready yet. Wait for "Model ready" or check console for errors.', 'warn');
                 return;
             }
@@ -642,7 +683,7 @@
             document.getElementById('testSpinner').style.display = 'inline-block';
             document.getElementById('testBtnText').textContent = 'Testing...';
             
-            window.ask("Write a simple hello world program in Python").then(() => {
+            askFn("Write a simple hello world program in Python").then(() => {
                 document.getElementById('testBtn').disabled = false;
                 document.getElementById('testSpinner').style.display = 'none';
                 document.getElementById('testBtnText').textContent = 'Test Model';
