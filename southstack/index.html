@@ -488,9 +488,46 @@
                     <span class="spinner" id="testSpinner" style="display:none;"></span>
                     <span id="testBtnText">Test Model</span>
                 </button>
+                <button id="p2pInitBtn" onclick="initP2P()" disabled>Init P2P</button>
                 <button id="clearCacheBtn" onclick="clearAllCache()">Clear Cache</button>
                 <button id="consoleBtn" onclick="openConsole()">Open Console</button>
                 <button id="statusBtn" onclick="showSystemStatus()">System Info</button>
+            </div>
+
+            <!-- P2P / Fault-tolerant coordination (manual signaling; no server) -->
+            <div class="card" style="grid-column: 1 / -1;">
+                <h3>🕸️ P2P Mesh (No Server)</h3>
+                <p style="color:#888;font-size:11px;margin-bottom:10px;">
+                    Copy/paste offer/answer between laptops to connect. Once connected, tokens/state are broadcast and leader failover uses prompt-replay continuation.
+                </p>
+                <div class="status-grid" style="margin-bottom: 10px;">
+                    <div class="status-item">
+                        <span class="status-label">Your Peer ID</span>
+                        <span class="status-value" id="p2pPeerId">(init)</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Connected Peers</span>
+                        <span class="status-value" id="p2pPeers">(none)</span>
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                    <div>
+                        <div class="info-text" style="margin:0 0 6px 0;">Offer creator (Laptop A)</div>
+                        <button onclick="createOffer()" style="width:100%;margin-bottom:6px;">Create Offer</button>
+                        <textarea id="p2pOfferOut" placeholder="Offer output (copy to Laptop B)"></textarea>
+                        <div class="divider"></div>
+                        <textarea id="p2pAnswerIn" placeholder="Paste Answer from Laptop B here"></textarea>
+                        <button onclick="acceptAnswer()" style="width:100%;margin-top:6px;">Accept Answer</button>
+                    </div>
+                    <div>
+                        <div class="info-text" style="margin:0 0 6px 0;">Offer receiver (Laptop B)</div>
+                        <textarea id="p2pOfferIn" placeholder="Paste Offer from Laptop A here"></textarea>
+                        <button onclick="acceptOfferCreateAnswer()" style="width:100%;margin-top:6px;">Create Answer</button>
+                        <textarea id="p2pAnswerOut" placeholder="Answer output (copy back to Laptop A)"></textarea>
+                        <div class="divider"></div>
+                        <button onclick="syncState()" style="width:100%;">Request State Sync</button>
+                    </div>
+                </div>
             </div>
             
             <!-- Console Output Section -->
@@ -597,6 +634,8 @@
             if (btn) btn.disabled = false;
             const askBtn = document.getElementById('askBtn');
             if (askBtn) askBtn.disabled = false;
+            const p2pBtn = document.getElementById('p2pInitBtn');
+            if (p2pBtn) p2pBtn.disabled = false;
         });
         
         function sendPrompt() {
@@ -680,6 +719,53 @@
                 'Connection: ' + (navigator.onLine ? 'Online' : 'Offline') + '\n\n' +
                 'For full system info, open browser console (F12).'
             );
+        }
+
+        // P2P helper UI (manual offer/answer; no server)
+        async function initP2P() {
+            if (!window.SouthStack || typeof window.SouthStack.ensureFT !== 'function') {
+                updateConsoleOutput('❌ Fault tolerance coordinator not available yet.', 'error');
+                return;
+            }
+            const ft = await window.SouthStack.ensureFT();
+            updateConsoleOutput('🕸️ P2P ready. peerId=' + ft.peerId, 'success');
+            const el = document.getElementById('p2pPeerId');
+            if (el) el.textContent = ft.peerId;
+        }
+
+        async function createOffer() {
+            const ft = await window.SouthStack.ensureFT();
+            const offer = await ft.createOffer();
+            const out = document.getElementById('p2pOfferOut');
+            if (out) out.value = offer;
+            updateConsoleOutput('📨 Offer created. Paste into remote peer.', 'log');
+        }
+
+        async function acceptOfferCreateAnswer() {
+            const ft = await window.SouthStack.ensureFT();
+            const offerIn = document.getElementById('p2pOfferIn')?.value || '';
+            const ans = await ft.acceptOfferAndCreateAnswer(offerIn.trim());
+            const out = document.getElementById('p2pAnswerOut');
+            if (out) out.value = ans;
+            updateConsoleOutput('✅ Offer accepted. Send answer back to offer-creator.', 'success');
+        }
+
+        async function acceptAnswer() {
+            const ft = await window.SouthStack.ensureFT();
+            const ansIn = document.getElementById('p2pAnswerIn')?.value || '';
+            await ft.acceptAnswer(ansIn.trim());
+            updateConsoleOutput('✅ Answer accepted. DataChannel should open shortly.', 'success');
+            setTimeout(async () => {
+                const s = await window.SouthStack.getFTStatus();
+                const el = document.getElementById('p2pPeers');
+                if (el) el.textContent = (s.peers || []).join(', ') || '(none)';
+            }, 800);
+        }
+
+        async function syncState() {
+            const ft = await window.SouthStack.ensureFT();
+            ft.requestStateSync();
+            updateConsoleOutput('🔄 State sync requested.', 'log');
         }
     </script>
 

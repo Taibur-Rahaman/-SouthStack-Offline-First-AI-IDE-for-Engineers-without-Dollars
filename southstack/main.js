@@ -18,6 +18,7 @@ let webllm = null;
 let currentModel = null;
 let isModelLoaded = false;
 let engine = null;
+let ft = null;
 
 function printBanner() {
     console.log('============================================================');
@@ -172,35 +173,53 @@ async function ensureInitialized() {
     return engine;
 }
 
+async function ensureFT() {
+    if (ft) return ft;
+    const mod = await import('./fault-tolerance.js');
+    const { SouthStackFT } = mod;
+    ft = new SouthStackFT({ sessionId: 'southstack-default' });
+    ft.setEngineProvider(async () => await ensureInitialized());
+    ft.onState = (s) => {
+        try {
+            const box = document.getElementById('responseBox');
+            const statusEl = document.getElementById('askStatus');
+            if (box) {
+                if (s.status === 'idle') {
+                    box.textContent = 'Response will appear here and in the browser console.';
+                    box.classList.add('empty');
+                    box.classList.remove('streaming');
+                } else {
+                    box.textContent = s.partialOutput || '';
+                    box.classList.remove('empty');
+                    if (s.status === 'running') box.classList.add('streaming');
+                    else box.classList.remove('streaming');
+                }
+            }
+            if (statusEl) {
+                const role = s.leaderId ? (s.leaderId === ft.peerId ? 'Leader' : 'Follower') : 'No leader';
+                statusEl.textContent = `${role} • ${s.status}`;
+            }
+        } catch {}
+    };
+    await ft.start();
+    return ft;
+}
+
 window.ask = async function(prompt) {
     console.log('\n=== Prompt ===');
     console.log(prompt);
     console.log('==============');
     try {
-        const eng = await ensureInitialized();
-        console.log('Generating...');
-        let full = '';
-        const stream = await eng.chat.completions.create({
-            messages: [{role: 'user', content: prompt}],
-            max_tokens: CONFIG.maxTokens,
-            temperature: CONFIG.temperature,
-            stream: true
-        });
-        for await (const chunk of stream) {
-            const txt = chunk.choices[0]?.delta?.content || '';
-            if (txt) {
-                full += txt;
-                if (typeof process !== 'undefined' && process.stdout && process.stdout.write) {
-                    process.stdout.write(txt);
-                } else {
-                    console.log(txt);
-                }
-            }
-        }
+        // Fault-tolerant replicated generation. If P2P is not connected, this still works locally.
+        const coordinator = await ensureFT();
+        console.log('FT peerId:', coordinator.peerId);
+        console.log('Generating (replicated)...');
+        await coordinator.runPrompt(prompt);
+        const s = coordinator.getState();
         console.log('\n=== Response ===');
-        console.log(full);
+        console.log(s.partialOutput || '');
         console.log('================');
-        return full;
+        return s.partialOutput || '';
     } catch (e) {
         console.error('Error:', e);
         throw e;
@@ -212,6 +231,12 @@ window.SouthStack = {
     ensureInitialized: () => ensureInitialized(),
     initializeEngine: (m) => initializeEngine(m),
     getModelInfo: () => ({ currentModel, isLoaded: isModelLoaded, config: CONFIG }),
+    ensureFT: () => ensureFT(),
+    getFTStatus: async () => {
+        const c = await ensureFT();
+        const s = c.getState();
+        return { peerId: c.peerId, leaderId: s.leaderId, term: s.term, peers: c.listPeers(), status: s.status };
+    },
     getSystemStatus: async () => ({
         webGPU: !!navigator.gpu,
         ramGB: await checkRAM(),
