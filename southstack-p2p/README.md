@@ -2,6 +2,28 @@
 
 Browser-based multi-device coding assistant: **small LLMs via WebGPU (WebLLM)** + **WebRTC data channels** for shared jobs—plan → delegate subtasks → merge. **No cloud LLM API**; prompts and shared task traffic go **peer-to-peer**.
 
+## New User Quick Run
+
+For first-time users, use this exact flow:
+
+1. Start server:
+   ```bash
+   cd southstack-p2p
+   python3 serve_with_signal.py
+   ```
+   Windows:
+   ```bash
+   cd southstack-p2p
+   py -3 serve_with_signal.py
+   ```
+2. Host opens `http://127.0.0.1:8000`.
+3. Click **Start session — show link & QR**.
+4. Guest device (same Wi-Fi) opens invite link or scans QR, then taps **Join room**.
+5. Confirm **Devices in this room** shows `2+`.
+6. Ask from chat box; Stop works from host or guest.
+
+If stale assets appear, open once with `?nosw=1`.
+
 ## Features
 
 - **Multi-laptop / phone guest:** WebRTC mesh; **leader** starts **Start shared job**; guests help run subtasks when they have WebGPU.

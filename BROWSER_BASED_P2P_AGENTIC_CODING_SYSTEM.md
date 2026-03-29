@@ -6,6 +6,30 @@
 
 ---
 
+## Quick run for new users
+
+Use this before reading the full paper:
+
+```bash
+cd southstack-p2p
+python3 serve_with_signal.py
+```
+
+Windows:
+
+```bash
+cd southstack-p2p
+py -3 serve_with_signal.py
+```
+
+- Host browser: `http://127.0.0.1:8000` -> **Start session — show link & QR**
+- Guest device (same Wi-Fi): open invite link / scan QR -> **Join room**
+- If old cached UI appears: add `?nosw=1` once
+
+Full step-by-step setup: [`RUN_ON_NEW_PC.md`](RUN_ON_NEW_PC.md).
+
+---
+
 ## 1) Introduction
 
 **Browser-Based P2P Agentic Coding System** ekta browser-based CLI platform, jekhane multiple devices mile distributed coding task run korte pare. Ei system-er main vision holo: local device e small LLM run kore collaborative coding support deya, without cloud dependency.

@@ -2,6 +2,25 @@
 
 Use this before class demo to reduce failures.
 
+## New user quick run (before checklist)
+
+If someone is running the project for the first time:
+
+```bash
+cd southstack-p2p
+python3 serve_with_signal.py
+```
+
+Windows:
+
+```bash
+cd southstack-p2p
+py -3 serve_with_signal.py
+```
+
+Then host opens `http://127.0.0.1:8000`, clicks **Start session — show link & QR**, and guest joins from same Wi-Fi via invite/QR.
+Use `?nosw=1` once if stale UI is shown.
+
 **Repo / docs (already aligned in this workspace):** root [`README.md`](README.md), [`RUN_ON_NEW_PC.md`](RUN_ON_NEW_PC.md), [`southstack-p2p/README.md`](southstack-p2p/README.md), and [`CSE327_FEASIBILITY_BRIEF.md`](CSE327_FEASIBILITY_BRIEF.md) §0 describe **`serve_with_signal.py`**, QR/invite flow, and instructor wording. **`npm test`** passes at repo root.
 
 The boxes below are **your** pre-flight checks on a machine—not something the repo can tick for you.

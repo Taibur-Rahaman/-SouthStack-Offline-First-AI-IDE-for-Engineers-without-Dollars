@@ -4,6 +4,26 @@ Project: **SouthStack** (offline-first AI IDE in the browser)
 Prepared for: **Dr. Nabeel Mohammed**  
 Scope: Local findings from this codebase and runtime tests (no external web research in this draft).
 
+## New user quick run
+
+For first-time execution of the project:
+
+```bash
+cd southstack-p2p
+python3 serve_with_signal.py
+```
+
+Windows:
+
+```bash
+cd southstack-p2p
+py -3 serve_with_signal.py
+```
+
+Host opens `http://127.0.0.1:8000` and taps **Start session — show link & QR**.  
+Guest on same Wi-Fi opens invite link or scans QR, then taps **Join room**.  
+If stale cache appears, use `?nosw=1` once.
+
 ## 0) Instructor / course project statement
 
 **One-line description (course ask):** Using small language models that run in the browser via **WebGPU**, we are building a **peer-to-peer agentic coding** system where **multiple laptops** connect over the network and **share the work** of a coding task (plan → delegate subtasks → merge), **without** sending prompts or generated code through a **central cloud API**.

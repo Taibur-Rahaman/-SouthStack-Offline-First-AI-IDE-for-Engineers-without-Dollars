@@ -2,6 +2,28 @@
 
 Browser-based **WebGPU LLM** demo (`southstack/`) and **peer-to-peer agentic coding** prototype (`southstack-p2p/`) with WebRTC task sharing—no cloud LLM API for inference.
 
+## New User Quick Run (Recommended)
+
+Use this path for first-time setup on a new machine:
+
+1. Open terminal in this repo.
+2. Run:
+   ```bash
+   cd southstack-p2p
+   python3 serve_with_signal.py
+   ```
+   Windows alternative:
+   ```bash
+   cd southstack-p2p
+   py -3 serve_with_signal.py
+   ```
+3. On host PC open `http://127.0.0.1:8000`.
+4. Click **Start session — show link & QR**.
+5. On phone/second laptop (same Wi-Fi), open the invite link / QR and tap **Join room**.
+6. Ask from the chat input; coordinator device runs the model.
+
+If UI seems stale, open once with `?nosw=1` (example: `http://192.168.x.x:8000/?nosw=1`).
+
 ## Quick links
 
 | What | Where |

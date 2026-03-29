@@ -2,6 +2,29 @@
 
 Follow these steps on any new computer.
 
+## 0. Fastest path (recommended for class demo)
+
+If you only need the multi-device P2P app:
+
+```bash
+cd southstack-p2p
+python3 serve_with_signal.py
+```
+
+Windows:
+
+```bash
+cd southstack-p2p
+py -3 serve_with_signal.py
+```
+
+Then:
+- Host: open `http://127.0.0.1:8000` -> **Start session — show link & QR**
+- Guest phone/laptop (same Wi-Fi): open invite link / scan QR -> **Join room**
+- Ask from chat input (coordinator executes model)
+
+If cached old UI appears, append `?nosw=1` once.
+
 ## 1. Get the code
 
 ```bash
