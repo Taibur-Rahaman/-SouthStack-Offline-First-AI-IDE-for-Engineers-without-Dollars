@@ -3,13 +3,14 @@
  * Handles offline caching of model weights and assets
  */
 
-const CACHE_NAME = 'southstack-v2';
-const WEBLLM_CACHE = 'webllm-models-v2';
+const CACHE_NAME = 'southstack-v7';
+const WEBLLM_CACHE = 'webllm-models-v6';
 
 // URLs to cache
 const STATIC_ASSETS = [
     './',
     './index.html',
+    './webgpu-early-compat.js',
     './main.js',
     './manifest.json',
     'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.80/lib/index.js'
@@ -63,6 +64,11 @@ self.addEventListener('activate', (event) => {
  */
 self.addEventListener('fetch', (event) => {
     const url = new URL(event.request.url);
+    const isAppShell = url.origin === self.location.origin &&
+        (url.pathname.endsWith('/index.html') ||
+            url.pathname.endsWith('/main.js') ||
+            url.pathname.endsWith('/webgpu-early-compat.js') ||
+            url.pathname === '/');
     
     // Skip cross-origin requests (except CDN)
     if (url.origin !== self.location.origin && 
@@ -102,6 +108,20 @@ self.addEventListener('fetch', (event) => {
                     });
                 });
             })
+        );
+        return;
+    }
+
+    // Always prefer latest app shell files to avoid stale code after fixes.
+    if (isAppShell) {
+        event.respondWith(
+            fetch(event.request).then((response) => {
+                if (response && response.status === 200) {
+                    const copy = response.clone();
+                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+                }
+                return response;
+            }).catch(() => caches.match(event.request))
         );
         return;
     }

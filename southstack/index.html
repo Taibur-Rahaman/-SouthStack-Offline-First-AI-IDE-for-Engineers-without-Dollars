@@ -465,8 +465,8 @@
                 </div>
                 <div class="divider"></div>
                 <div class="info-text">
-                    💡 Primary: Llama-3.2-1B<br>
-                    🔄 Fallback: SmolLM2-360M
+                    💡 Primary: Qwen1.5-1.8B (WebGPU)<br>
+                    🔄 Fallback: TinyLlama-1.1B
                 </div>
             </div>
             
@@ -536,7 +536,7 @@
         // Service Worker Registration - cache HTML, JS, model shards
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./service-worker.js')
+                navigator.serviceWorker.register('./service-worker.js?v=6')
                     .then(registration => {
                         console.log('✅ Service Worker registered:', registration.scope);
                         updateConsoleOutput('✅ Service Worker registered', 'success');
@@ -683,7 +683,8 @@
         }
     </script>
 
+    <script src="./webgpu-early-compat.js?v=3"></script>
     <!-- Load main.js as ES module (no frameworks, no build tools) -->
-    <script type="module" src="./main.js"></script>
+    <script type="module" src="./main.js?v=10"></script>
 </body>
 </html>

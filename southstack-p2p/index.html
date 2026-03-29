@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SouthStack — Team coding</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --wa-bg: #0b141a;
+            --wa-panel: #111b21;
+            --wa-panel-alt: #202c33;
+            --wa-border: #2a3942;
+            --wa-accent: #00a884;
+            --wa-text-muted: #8696a0;
+        }
+        body {
+            font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+            background: var(--wa-bg);
+            color: #e9edef;
+            background-image: radial-gradient(circle at 12% 20%, rgba(0, 168, 132, 0.15), transparent 28%), radial-gradient(circle at 88% 4%, rgba(83, 189, 235, 0.12), transparent 24%);
+        }
+        .container {
+            max-width: 1180px;
+            margin: 18px auto;
+            padding: 14px;
+            background: color-mix(in srgb, var(--wa-panel) 94%, transparent);
+            border: 1px solid #24343d;
+            border-radius: 14px;
+            box-shadow: 0 18px 34px rgba(0, 0, 0, 0.35);
+        }
+        h1 {
+            color: #00a884;
+            -webkit-text-fill-color: currentColor;
+            background: none;
+            letter-spacing: 0.2px;
+        }
+        .section {
+            background: var(--wa-panel-alt);
+            border: 1px solid var(--wa-border);
+            border-radius: 12px;
+            padding: 18px;
+            margin: 14px 0;
+        }
+        button { background: var(--wa-accent); color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: 600; transition: transform 120ms ease, filter 120ms ease; }
+        button:hover { background: #06b992; }
+        button:active { transform: translateY(1px); }
+        button:disabled { background: #666; cursor: not-allowed; }
+        .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .wa-app-bar {
+            margin-top: 0;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            background: #202c33;
+            border: 1px solid #2a3942;
+            border-radius: 12px;
+            padding: 10px 12px;
+        }
+        .wa-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+        .wa-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(150deg, #00a884, #128c7e);
+            color: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 800;
+            box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.16);
+        }
+        .wa-brand-copy { min-width: 0; }
+        .wa-brand-copy p { margin: 2px 0 0; }
+        @media (max-width: 760px) {
+            .wa-app-bar { align-items: flex-start; }
+            .wa-brand { flex: 1 1 auto; }
+            .wa-brand-copy h1 { font-size: 22px; line-height: 1.15; }
+            .wa-top-actions { flex-shrink: 0; }
+            .wa-avatar { width: 34px; height: 34px; font-size: 14px; }
+        }
+        a.nav-guide {
+            display: inline-block;
+            background: #233138;
+            color: #e9edef !important;
+            text-decoration: none;
+            padding: 9px 12px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 12px;
+            border: 1px solid #324954;
+        }
+        a.nav-guide:hover { background: #2c404a; }
+        .wa-top-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            position: relative;
+        }
+        .wa-menu-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            border: 1px solid #324954;
+            background: #233138;
+            color: #d5e8ff;
+            font-size: 20px;
+            line-height: 1;
+            padding: 0;
+        }
+        .wa-menu-btn:hover { background: #2c404a; }
+        .wa-settings-menu {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            min-width: 230px;
+            background: #111b21;
+            border: 1px solid #2a3942;
+            border-radius: 10px;
+            box-shadow: 0 16px 30px rgba(0, 0, 0, 0.45);
+            padding: 8px;
+            display: none;
+            z-index: 30;
+        }
+        .wa-settings-menu.open { display: block; }
+        .wa-settings-item {
+            width: 100%;
+            text-align: left;
+            background: transparent;
+            border: none;
+            color: #e9edef;
+            border-radius: 8px;
+            padding: 10px 11px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .wa-settings-item:hover { background: #202c33; }
+        .wa-settings-item-muted { color: #8696a0; }
+        .muted { opacity: 0.85; font-size: 12px; margin-top: 6px; color: #93a3ac; }
+        .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .panel { background: #111b21; border: 1px solid #2a3942; border-radius: 10px; padding: 12px; }
+        .panel h4 { margin-bottom: 8px; color: #b7d7ff; }
+        .small { font-size: 12px; opacity: 0.92; color: #b4c1c8; }
+        .qr-wrap { margin-top: 10px; display: none; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .qr-wrap img { width: 150px; height: 150px; border-radius: 8px; background: #fff; padding: 6px; }
+        #peers, #messages, #tasks { height: 200px; overflow-y: auto; background: #111b21; padding: 10px; border-radius: 8px; margin: 10px 0; border: 1px solid #2a3942; }
+        input, textarea { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #2a3942; background: #111b21; color: #e9edef; }
+        .status { font-weight: bold; padding: 10px; border-radius: 8px; margin: 10px 0; }
+        .status.connected { background: #34c759; }
+        .status.disconnected { background: #ff3b30; }
+        .status.pending { background: #ff9f0a; color: #111; }
+        #guestInviteBanner { display: none; padding: 16px; border-radius: 12px; border: 2px solid #1e8aad; background: rgba(0, 90, 130, 0.35); margin: 16px 0; }
+        #guestInviteBanner a { color: #7fdbff; font-weight: 600; }
+        html.guest-qr-landing #guestInviteBanner { display: block; }
+        /* Host-only chrome hidden on small screens when guest opened invite — chat stays visible (full thread like the other device). */
+        html.guest-qr-landing .guest-hide-on-invite { display: none !important; }
+        html.guest-qr-landing #connDiagPanel { display: none !important; }
+        @media (min-width: 900px) {
+            html.guest-qr-landing .guest-hide-on-invite { display: block !important; }
+            html.guest-qr-landing #guestInviteBanner { display: none !important; }
+            html.guest-qr-landing #connDiagPanel { display: block !important; }
+        }
+        /* Phone / invite: chat-first layout — same WhatsApp-style thread as host, not buried below the fold */
+        @media (max-width: 899px) {
+            html.guest-qr-landing .container {
+                display: flex;
+                flex-direction: column;
+                min-height: 100vh;
+                padding: 10px 12px 24px;
+                box-sizing: border-box;
+            }
+            html.guest-qr-landing .container > .row:first-child {
+                order: 1;
+                flex-shrink: 0;
+                margin-bottom: 6px;
+            }
+            html.guest-qr-landing .container > .row:first-child .small { display: none; }
+            html.guest-qr-landing .container > #guestInviteBanner {
+                order: 2;
+                flex-shrink: 0;
+                margin: 0 0 10px;
+            }
+            html.guest-qr-landing .container > .section.ask-llm {
+                order: 3;
+                flex: 1 1 auto;
+                min-height: 0;
+                margin: 0 0 12px;
+                display: flex;
+                flex-direction: column;
+            }
+            html.guest-qr-landing .ask-llm h2 {
+                font-size: 15px;
+                margin-bottom: 6px;
+            }
+            html.guest-qr-landing .ask-llm .fold { margin: 6px 0; }
+            html.guest-qr-landing .ask-llm .wa-chat-wrap {
+                flex: 1 1 auto;
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+                margin-top: 10px;
+            }
+            html.guest-qr-landing #askLlmOutput.wa-chat-thread {
+                flex: 1 1 auto;
+                min-height: min(52vh, 420px);
+                max-height: none;
+            }
+            html.guest-qr-landing .container > #status { order: 4; flex-shrink: 0; }
+            html.guest-qr-landing .container > .section.meta-strip { order: 5; }
+            html.guest-qr-landing .container > #connect-devices { order: 6; }
+            html.guest-qr-landing .container > #taskSection { order: 7; }
+            html.guest-qr-landing .container > #peersSection { order: 8; }
+            html.guest-qr-landing .container > #activityLogSection { order: 9; }
+            html.guest-qr-landing .container > #sharedResultSection { order: 10; }
+            html.guest-qr-landing .container > #help-guide { order: 11; }
+            html.guest-qr-landing .container > #connDiagPanel { order: 12; }
+        }
+        @media (max-width: 899px) {
+            /* All narrow viewports: taller shared thread so host phone matches guest feel */
+            #askLlmOutput.wa-chat-thread {
+                min-height: min(44vh, 380px);
+                max-height: min(58vh, 520px);
+            }
+        }
+        .peer { background: #222; padding: 10px; margin: 5px 0; border-radius: 6px; }
+        .log { font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+        .steps-grid { display: grid; gap: 18px; margin-top: 12px; }
+        @media (min-width: 860px) { .steps-grid { grid-template-columns: 1fr 1fr; } }
+        .steps-box h3 { margin-bottom: 10px; color: #b7d7ff; font-size: 15px; }
+        .steps-box ol { margin: 0 0 0 1.15rem; padding: 0; }
+        .steps-box li { margin: 10px 0; line-height: 1.45; font-size: 13px; }
+        .steps-box code { background: rgba(0,0,0,0.45); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+        @media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
+        details.fold {
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 10px 14px;
+            margin: 10px 0;
+            background: rgba(0,0,0,0.22);
+        }
+        details.fold > summary {
+            cursor: pointer;
+            color: #9fd4ff;
+            font-size: 13px;
+            font-weight: 600;
+            list-style: none;
+        }
+        details.fold > summary::-webkit-details-marker { display: none; }
+        details.fold > summary::before { content: '▸ '; opacity: 0.75; }
+        details.fold[open] > summary::before { content: '▾ '; }
+        details.fold[open] > summary { margin-bottom: 10px; }
+        details.fold .fold-inner { font-size: 12px; line-height: 1.5; }
+        .connect-hub {
+            border: 2px solid #2a7ab8;
+            border-radius: 12px;
+            padding: 16px 18px;
+            margin-bottom: 18px;
+            background: linear-gradient(165deg, rgba(22, 55, 100, 0.55), rgba(12, 22, 42, 0.75));
+            box-shadow: 0 4px 24px rgba(0, 100, 200, 0.12);
+        }
+        .connect-hub h4 { color: #e8f4ff; font-size: 15px; margin: 0 0 4px; }
+        .connect-hub .tagline { font-size: 12px; opacity: 0.88; margin-bottom: 12px; }
+        .connect-split {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+        @media (max-width: 720px) {
+            .connect-split { grid-template-columns: 1fr; }
+        }
+        .connect-path {
+            background: rgba(0, 0, 0, 0.35);
+            border: 1px solid #3a5a78;
+            border-radius: 10px;
+            padding: 14px;
+        }
+        .connect-path strong { display: block; color: #9fd4ff; font-size: 13px; margin-bottom: 6px; }
+        .connect-path .small { margin-bottom: 10px; line-height: 1.45; }
+        .connect-path .row { margin-top: 0; }
+        button.btn-secondary {
+            background: #3a4a5c;
+        }
+        button.btn-secondary:hover {
+            background: #4a5f75;
+        }
+        #help-guide .guide-fold {
+            background: rgba(26,26,46,0.75);
+            border-radius: 12px;
+            border: 1px solid #2b2b3d;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+        #help-guide .guide-fold > summary {
+            cursor: pointer;
+            padding: 12px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #b7d7ff;
+            list-style: none;
+        }
+        #help-guide .guide-fold > summary::-webkit-details-marker { display: none; }
+        #help-guide .guide-fold > summary::before { content: '▸ '; opacity: 0.7; margin-right: 4px; }
+        #help-guide .guide-fold[open] > summary::before { content: '▾ '; }
+        #help-guide .guide-fold[open] > summary { border-bottom: 1px solid #2b3d55; }
+        #help-guide .guide-body { padding: 0 16px 16px; font-size: 13px; }
+        #help-guide .guide-body h4 { color: #9fd4ff; font-size: 14px; margin: 12px 0 6px; }
+        #help-guide .note { border-left: 3px solid #007AFF; padding-left: 12px; margin: 10px 0; font-size: 12px; color: #ccc; }
+        #help-guide pre {
+            background: rgba(0,0,0,0.55);
+            padding: 10px 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 8px 0;
+            border: 1px solid #333;
+            font-size: 12px;
+        }
+        /* WhatsApp-style shared Ask thread */
+        .wa-chat-wrap {
+            margin-top: 14px;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #2d4a3a;
+            background: #0b141a;
+            box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.35);
+        }
+        .wa-chat-header {
+            padding: 8px 12px;
+            font-size: 11px;
+            color: #8696a0;
+            background: #202c33;
+            border-bottom: 1px solid #2a3942;
+        }
+        #askLlmLoadBanner {
+            display: none;
+            padding: 10px 12px;
+            font-size: 12px;
+            color: #e9edef;
+            background: #182229;
+            border-bottom: 1px solid #2a3942;
+        }
+        #askLlmOutput.wa-chat-thread {
+            min-height: 200px;
+            max-height: min(52vh, 420px);
+            overflow-y: auto;
+            padding: 12px 10px 16px;
+            font-family: system-ui, -apple-system, sans-serif;
+            font-size: 14px;
+            line-height: 1.45;
+            white-space: normal;
+        }
+        .wa-empty {
+            color: #8696a0;
+            font-size: 13px;
+            text-align: center;
+            padding: 28px 16px;
+            line-height: 1.5;
+        }
+        .wa-row {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        .wa-row-out { justify-content: flex-end; }
+        .wa-row-in { justify-content: flex-start; }
+        .wa-bubble {
+            max-width: min(92%, 520px);
+            padding: 8px 11px 10px;
+            border-radius: 8px;
+            position: relative;
+        }
+        .wa-bubble-out {
+            background: #005c4b;
+            color: #e9edef;
+            border-radius: 8px 8px 0 8px;
+        }
+        .wa-bubble-in {
+            background: #202c33;
+            color: #e9edef;
+            border-radius: 8px 8px 8px 0;
+        }
+        .wa-bubble-streaming {
+            outline: 1px solid #00a884;
+        }
+        .wa-bubble-pending { opacity: 0.92; }
+        .wa-meta {
+            display: block;
+            font-size: 11px;
+            color: rgba(233, 237, 239, 0.65);
+            margin-bottom: 4px;
+        }
+        .wa-bubble-in .wa-meta { color: #8696a0; }
+        .wa-text { white-space: pre-wrap; word-break: break-word; }
+        .wa-cursor { color: #00a884; animation: wa-blink 1s step-end infinite; margin-left: 2px; }
+        @keyframes wa-blink { 50% { opacity: 0; } }
+        .wa-sending {
+            display: block;
+            font-size: 11px;
+            color: rgba(233, 237, 239, 0.7);
+            margin-top: 6px;
+        }
+        .social-chat-shell {
+            margin-top: 10px;
+            display: grid;
+            grid-template-columns: minmax(250px, 310px) 1fr;
+            border: 1px solid var(--wa-border);
+            border-radius: 12px;
+            overflow: hidden;
+            background: var(--wa-panel);
+            min-height: min(75vh, 760px);
+        }
+        .social-sidebar {
+            border-right: 1px solid var(--wa-border);
+            background: var(--wa-panel);
+            display: flex;
+            flex-direction: column;
+        }
+        .social-sidebar-head {
+            padding: 11px 12px;
+            border-bottom: 1px solid var(--wa-border);
+            font-size: 12px;
+            color: var(--wa-text-muted);
+            background: var(--wa-panel-alt);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .social-pill {
+            font-size: 11px;
+            color: #d6efe9;
+            background: rgba(0, 168, 132, 0.2);
+            border: 1px solid rgba(0, 168, 132, 0.32);
+            border-radius: 999px;
+            padding: 3px 8px;
+        }
+        .social-sidebar-search {
+            padding: 8px;
+            border-bottom: 1px solid var(--wa-border);
+            background: var(--wa-panel);
+        }
+        .social-sidebar-search input {
+            width: 100%;
+            font-size: 12px;
+            padding: 8px 10px;
+            border-radius: 999px;
+        }
+        .social-contact-list { padding: 8px; overflow-y: auto; }
+        .social-contact {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 9px 8px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .social-contact + .social-contact { margin-top: 3px; }
+        .social-contact.active { background: var(--wa-panel-alt); }
+        .social-contact:hover { background: #1a262d; }
+        .social-contact-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: linear-gradient(140deg, #00a884, #128c7e);
+            color: #fff;
+            font-weight: 700;
+            font-size: 12px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .social-contact-avatar.settings-avatar {
+            background: linear-gradient(140deg, #3a4a54, #2a3942);
+            font-size: 16px;
+        }
+        .social-contact-copy { min-width: 0; }
+        .social-contact-copy strong {
+            display: block;
+            font-size: 13px;
+            color: #e9edef;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .social-contact-copy span {
+            display: block;
+            font-size: 11px;
+            color: var(--wa-text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .social-contact-meta {
+            margin-left: auto;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 5px;
+            flex-shrink: 0;
+        }
+        .social-time {
+            font-size: 10px;
+            color: var(--wa-text-muted);
+        }
+        .social-unread {
+            min-width: 18px;
+            height: 18px;
+            border-radius: 999px;
+            background: var(--wa-accent);
+            color: #04241d;
+            font-size: 10px;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 5px;
+        }
+        .social-main {
+            background: var(--wa-bg);
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .social-main-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid #2a3942;
+            background: #202c33;
+        }
+        .social-main-title {
+            font-size: 13px;
+            color: #d1d7db;
+            font-weight: 600;
+        }
+        .social-main-sub {
+            font-size: 11px;
+            color: var(--wa-text-muted);
+            margin-top: 2px;
+        }
+        .social-main-presence {
+            font-size: 11px;
+            color: #b8d4ca;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .social-device-count {
+            color: #7dd3bd;
+            font-weight: 600;
+            background: rgba(22, 163, 74, 0.15);
+            border: 1px solid rgba(22, 163, 74, 0.4);
+            border-radius: 999px;
+            padding: 2px 8px;
+        }
+        .social-view { display: none; }
+        .social-view.active { display: block; }
+        .social-quick-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+            gap: 10px;
+            padding: 12px;
+        }
+        .social-quick-card {
+            background: #111b21;
+            border: 1px solid #2a3942;
+            border-radius: 10px;
+            padding: 10px;
+        }
+        .social-quick-card strong {
+            display: block;
+            color: #e9edef;
+            font-size: 13px;
+            margin-bottom: 5px;
+        }
+        .social-quick-card span {
+            display: block;
+            color: #93a3ac;
+            font-size: 12px;
+            line-height: 1.4;
+            margin-bottom: 8px;
+        }
+        .social-quick-card button { width: 100%; }
+        .deprecated-ui { display: none !important; }
+        .social-composer {
+            border-top: 1px solid var(--wa-border);
+            background: var(--wa-panel-alt);
+            padding: 10px;
+        }
+        .social-composer textarea { margin-top: 0 !important; min-height: 76px; }
+        .social-composer .row { margin-top: 8px; align-items: center; justify-content: space-between; }
+        .social-hint {
+            font-size: 11px;
+            color: var(--wa-text-muted);
+        }
+        .social-send {
+            min-width: 92px;
+            border-radius: 999px;
+        }
+        .social-stop {
+            min-width: 92px;
+            border-radius: 999px;
+            background: #5b2b2b;
+        }
+        .social-stop:hover {
+            background: #763434;
+        }
+        @media (max-width: 920px) {
+            .social-chat-shell { grid-template-columns: 1fr; }
+            .social-sidebar { border-right: none; border-bottom: 1px solid #2a3942; }
+        }
+        #othersPanel summary {
+            cursor: pointer;
+            color: #9fd4ff;
+            font-size: 13px;
+            font-weight: 600;
+            list-style: none;
+        }
+        #othersPanel summary::-webkit-details-marker { display: none; }
+        #othersPanel summary::before { content: '▸ '; opacity: 0.75; }
+        #othersPanel[open] summary::before { content: '▾ '; }
+        #othersPanel[open] summary { margin-bottom: 10px; }
+
+        /* Final visual polish */
+        body { font-size: 15px; }
+        .container {
+            max-width: 1320px;
+            padding: 18px;
+            border-radius: 18px;
+            box-shadow: 0 28px 60px rgba(0, 0, 0, 0.38);
+        }
+        h1 {
+            font-size: 36px;
+            line-height: 1.05;
+            font-weight: 800;
+            letter-spacing: 0.1px;
+        }
+        .wa-brand-copy p {
+            font-size: 13px;
+            line-height: 1.35;
+            color: #b9c6cc;
+        }
+        .wa-app-bar {
+            border-radius: 14px;
+            padding: 12px 14px;
+        }
+        .social-chat-shell {
+            grid-template-columns: minmax(280px, 340px) 1fr;
+            min-height: min(79vh, 860px);
+            border-radius: 14px;
+        }
+        .social-sidebar-head {
+            font-size: 13px;
+            padding: 12px;
+        }
+        .social-sidebar-search input {
+            font-size: 13px;
+            padding: 10px 12px;
+            border-radius: 10px;
+        }
+        .social-contact {
+            padding: 11px 10px;
+            border-radius: 10px;
+        }
+        .social-contact-avatar {
+            width: 36px;
+            height: 36px;
+            font-size: 12px;
+        }
+        .social-contact-copy strong { font-size: 14px; }
+        .social-contact-copy span { font-size: 12px; }
+        .social-main-top {
+            padding: 12px 14px;
+            min-height: 62px;
+        }
+        .social-main-title { font-size: 16px; }
+        .social-main-sub { font-size: 12px; }
+        .social-main-presence { font-size: 12px; }
+        .wa-chat-header {
+            font-size: 12px;
+            padding: 9px 14px;
+        }
+        .social-view.active {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            flex: 1 1 auto;
+        }
+        #chatViewRoom .wa-chat-wrap {
+            margin-top: 0 !important;
+            border: none !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            flex: 1 1 auto;
+        }
+        #askLlmOutput.wa-chat-thread {
+            font-size: 15px;
+            padding: 16px 14px 18px;
+            min-height: 320px;
+            max-height: none;
+            flex: 1 1 auto;
+            background-image: radial-gradient(circle at 10% 14%, rgba(0, 168, 132, 0.08), transparent 26%);
+        }
+        .social-composer {
+            padding: 12px;
+            border-top: 1px solid var(--wa-border);
+        }
+        .social-composer textarea {
+            min-height: 68px;
+            font-size: 14px;
+            border-radius: 10px;
+        }
+        .social-send {
+            min-width: 100px;
+            font-size: 14px;
+            padding: 9px 18px;
+        }
+        .social-stop {
+            min-width: 100px;
+            font-size: 14px;
+            padding: 9px 18px;
+        }
+        .social-quick-grid {
+            padding: 14px;
+            gap: 12px;
+        }
+        .social-quick-card {
+            padding: 12px;
+            border-radius: 12px;
+        }
+        .social-quick-card strong { font-size: 14px; }
+        .social-quick-card span { font-size: 12px; }
+        #othersPanel {
+            margin-top: 12px;
+            border-radius: 12px;
+        }
+        #othersPanel > summary {
+            padding: 10px 2px;
+            font-size: 14px;
+        }
+        @media (max-width: 980px) {
+            .container { padding: 12px; margin: 10px; }
+            h1 { font-size: 28px; }
+            .social-chat-shell {
+                grid-template-columns: 1fr;
+                min-height: auto;
+            }
+            .social-sidebar {
+                max-height: 300px;
+            }
+            #askLlmOutput.wa-chat-thread {
+                min-height: 260px;
+                max-height: 55vh;
+                flex: none;
+            }
+        }
+    </style>
+    <script>
+    (function () {
+      function inviteParams() {
+        var p = new URLSearchParams(location.search);
+        if (p.get('room')) return p;
+        var h = location.hash.replace(/^#/, '');
+        var q = h.indexOf('?');
+        if (q >= 0) {
+          try {
+            var inner = new URLSearchParams(h.substring(q + 1));
+            if (inner.get('room')) return inner;
+          } catch (x) {}
+        }
+        return p;
+      }
+      function wants(p) {
+        if (p.get('nojoin') === '1') return false;
+        var j = p.get('join');
+        if (j != null && j !== '') {
+          var lo = String(j).toLowerCase();
+          if (lo === '0' || lo === 'false' || lo === 'no' || lo === 'off') return false;
+          if (lo === '1' || lo === 'true' || lo === 'yes' || lo === 'on') return true;
+          return false;
+        }
+        return p.get('invite') === '1' || p.get('autojoin') === '1';
+      }
+      try {
+        if (new URLSearchParams(location.search).get('full') === '1') return;
+        var ip = inviteParams();
+        var room = (ip.get('room') || '').trim();
+        if (room && wants(ip)) document.documentElement.classList.add('guest-qr-landing');
+      } catch (e) {}
+    })();
+    </script>
+</head>
+<body>
+    <div class="container">
+        <div class="row wa-app-bar">
+            <div class="wa-brand">
+                <div class="wa-avatar" aria-hidden="true">SS</div>
+                <div class="wa-brand-copy">
+                    <h1 style="margin-bottom:4px;">SouthStack Team Coding</h1>
+                    <p class="small" style="margin:0;max-width:52rem;">Browser-only peer coding with a WhatsApp-style shared thread.</p>
+                </div>
+            </div>
+            <div class="wa-top-actions guest-hide-on-invite">
+                <a class="nav-guide" href="#help-guide">Help &amp; AI</a>
+                <button type="button" id="waSettingsBtn" class="wa-menu-btn" aria-label="Open WhatsApp-style settings" aria-expanded="false">⋮</button>
+                <div id="waSettingsMenu" class="wa-settings-menu" role="menu" aria-label="Settings options">
+                    <button type="button" class="wa-settings-item" data-target="connect-devices" role="menuitem">Connect devices</button>
+                    <button type="button" class="wa-settings-item" data-target="peersSection" role="menuitem">Devices in this room</button>
+                    <button type="button" class="wa-settings-item" data-target="activityLogSection" role="menuitem">Activity log</button>
+                    <button type="button" class="wa-settings-item" data-target="sharedResultSection" role="menuitem">Shared result</button>
+                    <button type="button" class="wa-settings-item" data-target="help-guide" role="menuitem">Help &amp; AI</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="guestInviteBanner">
+            <p style="font-size:17px;font-weight:700;margin:0 0 10px;color:#9fd4ff;">You opened an invite (QR / link)</p>
+            <p class="small" style="margin:0;line-height:1.5;">Room: <code id="guestInviteRoomDisp" style="font-size:15px;user-select:all;">—</code></p>
+            <p class="small" style="margin-top:12px;line-height:1.55;">Stay on <strong>Wi‑Fi</strong> (same network as the host PC). This page will try to <strong>join automatically</strong>. If you still see “Devices in this room (0)” after ~30s, scroll to <a href="#connect-guest">Guest → Join room</a> and tap it.</p>
+            <details class="fold" style="margin-top:12px;">
+                <summary>More invite tips</summary>
+                <div class="fold-inner">
+                    <p class="small" style="margin-top:0;opacity:0.88;">Tip: the host must run <code>python3 serve_with_signal.py</code> and the link must use your PC’s IP and the <strong>same port</strong> as in the PC’s browser (not <code>localhost</code> on the phone).</p>
+                    <p class="small" style="margin-top:8px;opacity:0.88;">Each device loads its <strong>own</strong> small LLM in the browser; they <strong>share the coding job</strong> over WebRTC once “Devices in this room” shows <strong>2+</strong>. If it stays at 1, WebRTC failed — use <code>?offline=1</code> on both sides (same Wi‑Fi).</p>
+                </div>
+            </details>
+            <script>
+            (function () {
+              try {
+                var ip = new URLSearchParams(location.search);
+                var r = ip.get('room');
+                if (!r && location.hash.indexOf('?') >= 0) {
+                  var inner = new URLSearchParams(location.hash.split('?')[1] || '');
+                  r = inner.get('room');
+                }
+                r = (r || '').trim();
+                var el = document.getElementById('guestInviteRoomDisp');
+                if (el && r) el.textContent = r;
+              } catch (e) {}
+            })();
+            </script>
+        </div>
+
+        <div class="section ask-llm">
+            <div class="social-chat-shell">
+                <aside class="social-sidebar" aria-label="Social chats">
+                    <div class="social-sidebar-head">
+                        <span>Workspace</span>
+                        <span class="social-pill">3 active</span>
+                    </div>
+                    <div class="social-sidebar-search">
+                        <input type="text" placeholder="Search chats">
+                    </div>
+                    <div class="social-contact-list">
+                        <div class="social-contact active" data-chatview="room" data-title="SouthStack Team Room" data-sub="WhatsApp-style shared thread across connected devices" data-target="askLlmInput">
+                            <div class="social-contact-avatar">SS</div>
+                            <div class="social-contact-copy">
+                                <strong>SouthStack Team Room</strong>
+                                <span>Shared coding messages show here</span>
+                            </div>
+                            <div class="social-contact-meta">
+                                <span class="social-time">now</span>
+                                <span class="social-unread">1</span>
+                            </div>
+                        </div>
+                        <div class="social-contact" data-chatview="ddev" data-title="DDEV Connect devices" data-sub="All device-link options inside this chat">
+                            <div class="social-contact-avatar settings-avatar">⚙</div>
+                            <div class="social-contact-copy">
+                                <strong>DDEV Connect</strong>
+                                <span>Link phone/laptop in this room</span>
+                            </div>
+                            <div class="social-contact-meta">
+                                <span class="social-time">2m</span>
+                            </div>
+                        </div>
+                        <div class="social-contact" data-chatview="ddev" data-title="Status & diagnostics" data-sub="Jump to status, peers, and activity log" data-target="status">
+                            <div class="social-contact-avatar">ST</div>
+                            <div class="social-contact-copy">
+                                <strong>Status & diagnostics</strong>
+                                <span>Open room health and devices section</span>
+                            </div>
+                            <div class="social-contact-meta">
+                                <span class="social-time">new</span>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+                <main class="social-main">
+                    <div class="social-main-top">
+                        <div>
+                            <div id="socialMainTitle" class="social-main-title">SouthStack Team Room</div>
+                            <div id="socialMainSub" class="social-main-sub">WhatsApp-style shared thread across connected devices</div>
+                        </div>
+                        <div class="social-main-presence">
+                            <span id="socialPresenceState">online</span>
+                            <span id="topDeviceCount" class="social-device-count">1 device</span>
+                        </div>
+                    </div>
+                    <div id="chatViewRoom" class="social-view active">
+                        <div class="wa-chat-wrap" style="margin-top:0;border:none;border-radius:0;box-shadow:none;">
+                            <div class="wa-chat-header">Shared chat — same thread on every device · one Ask at a time · coordinator runs the model</div>
+                            <div id="askLlmLoadBanner" aria-live="polite"></div>
+                            <div id="askLlmOutput" class="wa-chat-thread"></div>
+                        </div>
+                        <div class="social-composer">
+                            <textarea id="askLlmInput" rows="3" placeholder="Type a message to the coding assistant..."></textarea>
+                            <div class="row">
+                                <span class="social-hint">Press Ask to broadcast to linked devices.</span>
+                                <div style="display:flex;gap:8px;">
+                                    <button type="button" id="askLlmStopBtn" class="social-stop" onclick="stopAskCodingLLM()" disabled>Stop</button>
+                                    <button type="button" id="askLlmBtn" class="social-send" onclick="askCodingLLM()">Ask</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="chatViewDdev" class="social-view">
+                        <div class="wa-chat-wrap" style="margin-top:0;border:none;border-radius:0;box-shadow:none;">
+                            <div class="wa-chat-header">DDEV controls inside chat</div>
+                            <div class="social-quick-grid">
+                                <div class="social-quick-card">
+                                    <strong>Start session</strong>
+                                    <span>Create invite link and QR for new device.</span>
+                                    <button type="button" onclick="easyStartSessionAndShowQr()">Start session</button>
+                                </div>
+                                <div class="social-quick-card">
+                                    <strong>Join room</strong>
+                                    <span>Go to guest join panel and connect.</span>
+                                    <button type="button" data-target="connect-guest">Open join panel</button>
+                                </div>
+                                <div class="social-quick-card">
+                                    <strong>Next device</strong>
+                                    <span>Prepare new guest offer for another phone/PC.</span>
+                                    <button type="button" onclick="generateNextOffer()">New guest offer</button>
+                                </div>
+                                <div class="social-quick-card">
+                                    <strong>Copy invite link</strong>
+                                    <span>Share room URL with another device.</span>
+                                    <button type="button" onclick="copyJoinLink()">Copy link</button>
+                                </div>
+                                <div class="social-quick-card">
+                                    <strong>Show QR code</strong>
+                                    <span>Open or hide QR for the current invite link.</span>
+                                    <button type="button" onclick="toggleJoinQr()">Toggle QR</button>
+                                </div>
+                                <div class="social-quick-card">
+                                    <strong>Status</strong>
+                                    <span>See coordinator, devices, and logs below.</span>
+                                    <button type="button" data-target="status">Open status</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </main>
+            </div>
+        </div>
+
+        <details id="othersPanel" class="section guest-hide-on-invite">
+            <summary>Others</summary>
+            <div class="fold-inner">
+        <div class="section guest-hide-on-invite" style="padding:12px 16px;">
+            <p class="small" style="margin:0;">Quick: <code>cd southstack-p2p</code> → <code>python3 serve_with_signal.py</code> → <strong>Start session</strong>. Full manual: <a href="#help-guide" style="color:#7fdbff;font-weight:600;">Help &amp; AI</a> on this page.</p>
+        </div>
+
+        <!-- Status -->
+        <div id="status" class="status disconnected">Starting…</div>
+        <div class="section meta-strip" style="padding:12px 16px; font-size:13px;">
+            <div><strong>This device:</strong> <code id="myPeerId">—</code></div>
+            <div><strong>Coordinator (runs Ask):</strong> <code id="leaderId">—</code></div>
+            <div id="ftStatus" style="margin-top:6px; opacity:0.9;">Status —</div>
+        </div>
+
+        <div id="connDiagPanel" class="section" style="padding:14px 16px;font-size:13px;border:1px solid #2a4a6a;">
+            <strong style="color:#9fd4ff;">LAN connection check</strong>
+            <p class="small muted" style="margin-top:6px;">Loading…</p>
+        </div>
+
+        <!-- Room Management -->
+        <div class="section" id="connect-devices">
+            <h3>Connect devices</h3>
+
+            <div id="connect-new-device" class="connect-hub deprecated-ui" style="display:none;">
+                <h4>Connect a new device</h4>
+                <p class="tagline">Same Wi‑Fi as this machine. Pick host if you are sharing from this PC, or guest if you are on the phone / second laptop.</p>
+                <div class="connect-split">
+                    <div class="connect-path">
+                        <strong>Host — add a phone or PC</strong>
+                        <p class="small">Creates a room, invite link, and QR. For a <em>second</em> guest after one already joined, use <strong>New guest</strong> so WebRTC gets a fresh offer.</p>
+                        <div class="row">
+                            <button type="button" data-easy-start onclick="easyStartSessionAndShowQr()">Start session — link &amp; QR</button>
+                        </div>
+                        <div class="row">
+                            <button type="button" class="btn-secondary" onclick="createRoom(); document.getElementById('joinLink')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });">Create room &amp; show invite below</button>
+                        </div>
+                        <div class="row">
+                            <button type="button" class="btn-secondary" onclick="generateNextOffer(); document.getElementById('easy-connect-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });">New guest — another device</button>
+                        </div>
+                    </div>
+                    <div class="connect-path">
+                        <strong>Guest — join the host</strong>
+                        <p class="small">Paste the invite link or the room code from the host, then join. Needs <code>serve_with_signal.py</code> running on the host or manual SDP in Advanced.</p>
+                        <div class="row">
+                            <button type="button" onclick="document.getElementById('connect-guest')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); document.getElementById('inviteLinkInput')?.focus();">Go to Join room</button>
+                        </div>
+                        <div class="row">
+                            <button type="button" class="btn-secondary" onclick="document.getElementById('roomId')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); document.getElementById('roomId')?.focus();">Focus room code field</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="easy-connect-panel" class="panel" style="margin-bottom:16px;border:2px solid #1e6ab5;background:rgba(18,45,82,0.45);">
+                <h4 style="color:#9fd4ff;margin-bottom:8px;">Easy connect (recommended)</h4>
+                <p class="small">Run <strong><code>python3 serve_with_signal.py</code></strong> in <code>southstack-p2p</code> (or <code>./start-server.sh</code>). It serves the app and swaps WebRTC setup text automatically — no copy/paste between PCs.</p>
+                <div class="row" style="margin-top:12px;">
+                    <button type="button" id="easyStartBtn" data-easy-start onclick="easyStartSessionAndShowQr()">Start session — show link &amp; QR</button>
+                    <button type="button" class="btn-secondary" onclick="generateNextOffer()" title="After a guest connects, use this before inviting the next device">New guest — next device</button>
+                </div>
+                <p id="easyConnectStatus" class="muted" style="margin-top:10px;"></p>
+                <details class="fold">
+                    <summary>Tip: <code>?easy=1</code> auto-start</summary>
+                    <div class="fold-inner">
+                        <p class="small muted" style="margin:0;">Add <code>?easy=1</code> to the URL so the host can auto-start session + QR. Guests opening the invite link will try to <strong>join automatically</strong> when signaling is on.</p>
+                    </div>
+                </details>
+                <hr style="border:0;border-top:1px solid #333;margin:14px 0;">
+                <p class="small" style="color:#c9a227;"><strong>LAN URL for phones</strong> (filled automatically when possible):</p>
+                <input id="lanBaseUrl" type="text" spellcheck="false" autocomplete="off" placeholder="http://192.168.31.91:8000" style="margin-top:6px;" title="Must be 192.168.x.x (not 191.168) — your PC Wi‑Fi IP + port">
+                <div class="row" style="margin-top:8px;">
+                    <button type="button" onclick="applyLanBaseToInviteLink()">Apply to invite link &amp; QR</button>
+                </div>
+                <input id="roomId" placeholder="Room code (set when you start)" maxlength="20" style="margin-top:10px;">
+                <div class="row" style="margin-top:8px;">
+                    <button onclick="createRoom()">Create room only</button>
+                    <button onclick="copyRoomId()">Copy room code</button>
+                </div>
+                <p class="small" style="margin-top:12px;"><strong>Invite link</strong> — copy or scan:</p>
+                <input id="joinLink" placeholder="Appears after you start a session" readonly style="margin-top:6px;">
+                <div class="row" style="margin-top:8px;">
+                    <button onclick="copyJoinLink()">Copy invite link</button>
+                    <button onclick="shareJoinLink()">Share link</button>
+                    <button id="joinQrBtn" onclick="toggleJoinQr()">Show / hide QR</button>
+                </div>
+                <div id="joinQrWrap" class="qr-wrap">
+                    <img id="joinQrImg" alt="QR code for invite link">
+                    <div class="small">Scan with the other device (same Wi‑Fi).</div>
+                    <div id="joinQrMsg" class="small"></div>
+                </div>
+            </div>
+            <div id="connect-guest" class="panel" style="margin-bottom:14px;">
+                <h4 style="color:#b7d7ff;margin-bottom:8px;">Guest (other PC or phone)</h4>
+                <p class="small">Open the invite link from the host or scan the QR. With <code>serve_with_signal.py</code>, connection is automatic; otherwise tap <strong>Join room</strong>.</p>
+                <input id="inviteLinkInput" placeholder="Paste invite link (optional)" style="margin-top:8px;">
+                <div class="row" style="margin-top:8px;">
+                    <button onclick="applyInviteLink()">Use invite link</button>
+                    <button onclick="joinRoom()">Join room</button>
+                </div>
+                <textarea id="joinOffer" rows="3" placeholder="Only if manual mode: host’s WebRTC text" style="margin-top:10px;"></textarea>
+                <textarea id="joinerAnswer" readonly rows="4" placeholder="Guest reply (manual mode)" style="margin-top:8px;"></textarea>
+                <div class="row" style="margin-top:8px;">
+                    <button type="button" onclick="copyJoinerAnswer()">Copy my reply</button>
+                </div>
+                <div id="signalHint" class="muted" style="margin-top:8px;">Same-browser tabs can auto-fill SDP. Cross-device needs signaling server or paste.</div>
+            </div>
+            <details class="panel steps-box fold" style="margin-bottom:14px;border-color:#5c4a2a;">
+                <summary style="color:#e8b060;font-size:14px;">Can’t connect / connection refused — fixes</summary>
+                <div class="fold-inner" style="margin-top:10px;">
+                    <ol class="small" style="margin-left:1.1rem;line-height:1.5;">
+                        <li><strong>Wrong port (very common):</strong> Default server is <strong>:8000</strong>. If the phone URL shows <strong>:8001</strong> (or anything else) and nothing listens there → refused. Use <code>http://YOUR_IP:8000</code> or run <code>PORT=8001 python3 serve_with_signal.py</code> to match.</li>
+                        <li><strong>Typo:</strong> Use <code><strong>192</strong>.168.x.x</code>, not <code>191.168</code>. Click <strong>Apply to invite link &amp; QR</strong> after fixing.</li>
+                        <li><strong>Server on the host PC:</strong> In Terminal: <code>cd southstack-p2p</code> then <code>python3 serve_with_signal.py</code> — leave it running. No server → refused.</li>
+                        <li><strong>Firewall:</strong> Allow incoming connections for Python (or port <strong>8000</strong>) on the host.</li>
+                        <li><strong>127.0.0.1 on a phone</strong> means the phone itself — use the PC’s LAN link or QR after fixing the IP.</li>
+                        <li><strong>Invite works in one browser but not another:</strong> Use the same URL and port as the host. Append <code>?nosw=1</code> to skip the service worker if an old cache blocks <code>/api/southstack/</code>. Tap <strong>Join room</strong> again after the host has started the room.</li>
+                        <li><strong>Joined but “Devices in this room” shows only you / no shared job:</strong> WebRTC did not open between browsers. Add <code>?offline=1</code> to the URL on <strong>host and guest</strong> (same Wi‑Fi). Wait ~15s after join for ICE. Host: try <strong>New guest</strong> and a fresh invite.</li>
+                    </ol>
+                </div>
+            </details>
+            <div id="lanInviteHint" class="panel steps-box" style="display:none;margin-bottom:14px;border-color:#8b4040;background:rgba(80,30,30,0.25);">
+                <p class="small" style="margin:0;"><strong>QR still points at localhost.</strong> Set <strong>LAN URL for phones</strong> above → <strong>Apply</strong> → use <strong>Start session</strong> again or <strong>Create room only</strong> + refresh QR.</p>
+            </div>
+            <details class="panel" style="margin-bottom:12px;background:rgba(0,0,0,0.2);">
+                <summary style="cursor:pointer;color:#b7d7ff;padding:8px 0;">Advanced — manual WebRTC text (plain <code>http.server</code> only)</summary>
+                <div class="small" style="margin:10px 0;">If you use <code>python3 -m http.server</code> there is no signaling API. Copy the long blocks between host and guest.</div>
+                <div class="row" style="margin-top:8px;">
+                    <button type="button" onclick="copyOfferSdp()">Host: copy text for guest</button>
+                    <button type="button" onclick="generateNextOffer()">Host: new guest round</button>
+                </div>
+                <div id="myOffer" style="margin-top:10px;"></div>
+                <p style="margin:10px 0 6px; font-size:13px;">Host: paste guest’s reply</p>
+                <textarea id="answerSdp" rows="4" placeholder="Guest’s WebRTC reply"></textarea>
+                <button type="button" style="margin-top:8px;" onclick="(async()=>{const t=document.getElementById('answerSdp');if(t&&t.value)await completeHandshakeAnswer(t.value.trim());})()">Apply guest reply</button>
+            </details>
+            <div id="roomStatus"></div>
+        </div>
+
+        <!-- Task Input -->
+        <div class="section" id="taskSection">
+            <h3 id="taskSectionHeading">Send a coding job (coordinator only)</h3>
+            <p id="guestJobHint" class="muted" style="display:none;margin:0 0 10px;line-height:1.5;padding:10px;background:rgba(40,70,100,0.35);border-radius:8px;border:1px solid #3a5a80;">
+                <strong>This phone is a guest.</strong> Only the <strong>coordinator</strong> can tap “Start shared job” — use the device that shows <strong>(coordinator)</strong> under <em>Devices in this room</em>. After they start a job, this device may run a subtask; scroll down for <strong>Activity log</strong> and <strong>Shared result</strong>.
+            </p>
+            <textarea id="taskInput" placeholder="Example: Build a simple to-do page that saves to the browser" rows="3"></textarea>
+            <button type="button" id="startSharedJobBtn" onclick="assignTask()">Start shared job</button>
+        </div>
+
+        <!-- Peers -->
+        <div class="section" id="peersSection">
+            <h3>Devices in this room (<span id="peerCount">0</span>)</h3>
+            <div id="peers"></div>
+        </div>
+
+        <!-- Messages / Task Queue -->
+        <div class="section" id="activityLogSection">
+            <h3>Activity log</h3>
+            <div id="messages" class="log"></div>
+        </div>
+
+        <!-- Generated Code -->
+        <div class="section" id="sharedResultSection">
+            <h3>Shared result</h3>
+            <div id="output" class="log">Nothing yet — the host can send a job after everyone is connected.</div>
+            <button onclick="downloadCode()">Download as text file</button>
+        </div>
+
+        <div id="help-guide" class="section guest-hide-on-invite">
+            <h3 style="margin-bottom:8px;color:#e0e0e0;">Help &amp; AI — full manual</h3>
+            <p class="small" style="margin-bottom:14px;">Use <code>http://…/index.html#help-guide</code> to jump here. Sections are folded by default.</p>
+
+            <details class="guide-fold">
+                <summary>AI in this project</summary>
+                <div class="guide-body">
+                    <p><strong>Engine:</strong> <a href="https://github.com/mlc-ai/web-llm" style="color:#7fdbff;">WebLLM</a> / MLC loads quantized models in the browser (Chrome + WebGPU recommended).</p>
+                    <p style="margin-top:8px;"><strong>WhatsApp-style Ask:</strong> one chat thread; any linked device can Ask; everyone sees the same bubbles; only <strong>one</strong> generation at a time. The <em>coordinator</em> runs WebLLM — chosen among devices that report WebGPU, then lowest peer id (so a guest phone usually won’t steal the role from a PC).</p>
+                    <p style="margin-top:8px;"><strong>If one machine sleeps or closes:</strong> with exactly <strong>two</strong> devices, the WebRTC session ends — you must reconnect (same room code, host uses <strong>New guest</strong> / guest taps <strong>Join room</strong>). This is not WhatsApp’s cloud sync; there is no central server holding your session. With three or more linked peers, others may stay connected and elect a new coordinator.</p>
+                    <p style="margin-top:8px;"><strong>Low-spec PC + phone:</strong> you cannot merge RAM/CPU across browsers. Use <strong>Start shared job</strong> to delegate subtasks to peers with WebGPU; for Ask, the coordinator device runs the full model.</p>
+                    <p style="margin-top:8px;"><strong>Solo:</strong> Ask runs entirely on this device. First visit downloads JS + weights; cache + IndexedDB help later.</p>
+                    <div class="note">Checkpoints in IndexedDB are per browser profile. Reconnect the room after a full disconnect.</div>
+                </div>
+            </details>
+
+            <details class="guide-fold">
+                <summary>Quick start (server)</summary>
+                <div class="guide-body">
+                    <p><code>cd southstack-p2p</code> then <code>python3 serve_with_signal.py</code> — open <code>http://localhost:PORT</code> (see terminal), <strong>Start session — show link &amp; QR</strong>, same Wi‑Fi on other devices. Fallback: <code>python3 -m http.server 8000</code> and manual SDP (Advanced below).</p>
+                </div>
+            </details>
+
+            <details class="guide-fold">
+                <summary>Phone / tablet</summary>
+                <div class="guide-body">
+                    <div class="panel">
+                        <ol class="small" style="margin-left:1rem;">
+                            <li><strong>Same Wi‑Fi.</strong> Open <code>http://&lt;PC_LAN_IP&gt;:PORT</code> — not <code>localhost</code>.</li>
+                            <li><strong>Ask</strong> while linked: coordinator runs the model. <strong>Solo</strong> on phone needs WebGPU (often missing).</li>
+                            <li>Invite / QR avoids typing codes. <code>serve_with_signal.py</code> auto-swaps SDP when possible.</li>
+                            <li>Use the <strong>Ask</strong> button on mobile; <code>await promptCoding("…")</code> is for desktop DevTools.</li>
+                        </ol>
+                    </div>
+                </div>
+            </details>
+
+            <details class="guide-fold">
+                <summary>Single PC</summary>
+                <div class="guide-body">
+                    <div class="panel">
+                        <ol class="small" style="margin-left:1rem;">
+                            <li>Chrome + WebGPU.</li>
+                            <li>Wait for <strong>AI ready</strong> in the status bar.</li>
+                            <li><strong>Ask</strong> or Console: <code>await promptCoding("…")</code>.</li>
+                            <li>Two tabs: <strong>Connect devices</strong> + BroadcastChannel can auto-fill SDP.</li>
+                        </ol>
+                    </div>
+                </div>
+            </details>
+
+            <details class="guide-fold">
+                <summary>Multiple devices</summary>
+                <div class="guide-body">
+                    <div class="steps-grid">
+                        <div class="panel">
+                            <h4>Setup</h4>
+                            <ol class="small" style="margin-left:1rem;">
+                                <li>Host: server running; note LAN IP.</li>
+                                <li>Same URL for everyone on Wi‑Fi.</li>
+                                <li>Host: create room → invite. Guest: join or open link.</li>
+                                <li>Manual SDP: host copy offer → guest paste → guest copy answer → host apply.</li>
+                                <li>Another device: host <strong>New guest</strong> per round.</li>
+                            </ol>
+                        </div>
+                        <div class="panel">
+                            <h4>Shared job</h4>
+                            <ol class="small" style="margin-left:1rem;">
+                                <li>Host: <strong>Start shared job</strong>.</li>
+                                <li>Watch Activity log &amp; Shared result.</li>
+                                <li>LAN-only: <code>?offline=1</code> on all devices.</li>
+                                <li>Closing a tab drops P2P — reconnect.</li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <details class="guide-fold">
+                <summary>Console API</summary>
+                <div class="guide-body">
+                    <p>DevTools → Console, after the model loads:</p>
+                    <pre>await promptCoding("Explain what WebRTC is in one paragraph")</pre>
+                    <p class="muted" style="margin-top:8px;">For linked “shared Ask”, use the <strong>Ask</strong> button above.</p>
+                </div>
+            </details>
+
+            <details class="guide-fold">
+                <summary>URL flags</summary>
+                <div class="guide-body">
+                    <ul class="small" style="margin-left:1.1rem;">
+                        <li><code>?offline=1</code> — no Google STUN (same LAN).</li>
+                        <li><code>?nosw=1</code> — skip service worker if cache breaks <code>/api/southstack/</code>.</li>
+                        <li><code>?easy=1</code> — host auto-start session + QR.</li>
+                        <li>Invites: <code>room=…</code>, <code>join=1</code>, <code>invite=1</code>.</li>
+                    </ul>
+                </div>
+            </details>
+
+            <details class="guide-fold">
+                <summary>Troubleshooting</summary>
+                <div class="guide-body">
+                    <div class="panel">
+                        <ul class="small" style="margin-left:1.1rem;">
+                            <li><strong>Connection refused:</strong> wrong port, server off, or firewall.</li>
+                            <li><strong>192.168.x.x</strong> not 191.168; set LAN URL + Apply before QR.</li>
+                            <li><strong>Only 1 device:</strong> WebRTC failed — <code>?offline=1</code>, <strong>New guest</strong>.</li>
+                            <li><strong>WebGPU:</strong> recent Chrome; many phones can’t run solo.</li>
+                        </ul>
+                    </div>
+                    <p class="muted" style="margin-top:10px;">First visit needs network for WebLLM + weights; then cache + IndexedDB help.</p>
+                </div>
+            </details>
+        </div>
+            </div>
+        </details>
+    </div>
+
+    <script src="./webgpu-early-compat.js?v=3"></script>
+    <script type="module" src="./main.js?v=38"></script>
+    <script>
+    (function () {
+      var btn = document.getElementById('waSettingsBtn');
+      var menu = document.getElementById('waSettingsMenu');
+      var others = document.getElementById('othersPanel');
+      var socialTitle = document.getElementById('socialMainTitle');
+      var socialSub = document.getElementById('socialMainSub');
+      if (others) others.open = false;
+      function openTarget(targetId) {
+        var target = targetId ? document.getElementById(targetId) : null;
+        if (!target) return;
+        if (others && target !== others && others.contains(target)) others.open = true;
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (targetId === 'askLlmInput') target.focus();
+      }
+      function openChatView(viewName, title, subtitle) {
+        var normalized = viewName || 'room';
+        document.querySelectorAll('.social-view').forEach(function (view) {
+          view.classList.toggle('active', view.id === 'chatView' + normalized.charAt(0).toUpperCase() + normalized.slice(1));
+        });
+        if (socialTitle && title) socialTitle.textContent = title;
+        if (socialSub && subtitle) socialSub.textContent = subtitle;
+      }
+      if (!btn || !menu) return;
+
+      function closeMenu() {
+        menu.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      }
+
+      btn.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        var open = menu.classList.toggle('open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+
+      menu.addEventListener('click', function (ev) {
+        var item = ev.target.closest('[data-target]');
+        if (!item) return;
+        var targetId = item.getAttribute('data-target');
+        openTarget(targetId);
+        closeMenu();
+      });
+
+      document.addEventListener('click', function (ev) {
+        if (!menu.contains(ev.target) && ev.target !== btn) closeMenu();
+      });
+
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') closeMenu();
+      });
+
+      document.querySelectorAll('.social-contact[data-chatview]').forEach(function (item) {
+        item.addEventListener('click', function () {
+          document.querySelectorAll('.social-contact[data-chatview]').forEach(function (c) {
+            c.classList.remove('active');
+          });
+          item.classList.add('active');
+          var view = item.getAttribute('data-chatview');
+          var title = item.getAttribute('data-title') || 'SouthStack Team Room';
+          var sub = item.getAttribute('data-sub') || 'WhatsApp-style shared thread across connected devices';
+          openChatView(view, title, sub);
+          var targetId = item.getAttribute('data-target');
+          if (targetId) openTarget(targetId);
+        });
+      });
+
+      document.querySelectorAll('.social-quick-card [data-target]').forEach(function (item) {
+        item.addEventListener('click', function () {
+          var targetId = item.getAttribute('data-target');
+          openTarget(targetId);
+        });
+      });
+
+      var chatSearchInput = document.querySelector('.social-sidebar-search input');
+      if (chatSearchInput) {
+        chatSearchInput.addEventListener('input', function () {
+          var q = (chatSearchInput.value || '').trim().toLowerCase();
+          document.querySelectorAll('.social-contact[data-chatview]').forEach(function (item) {
+            var text = (item.textContent || '').toLowerCase();
+            item.style.display = !q || text.indexOf(q) >= 0 ? '' : 'none';
+          });
+        });
+      }
+    })();
+    </script>
+</body>
+</html>
+
