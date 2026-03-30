@@ -614,6 +614,33 @@ function log(msg) {
   el.scrollTop = el.scrollHeight;
 }
 
+function getFirstOpenPeerChannel() {
+  for (const [peerId, dc] of channelsByPeer.entries()) {
+    if (dc && dc.readyState === 'open') return { peerId, dc };
+  }
+  return null;
+}
+
+function runPeerHelloSmokeTest() {
+  const target = getFirstOpenPeerChannel();
+  if (!target) {
+    log('Smoke test: no open peer channel yet. Connect another device first.');
+    return;
+  }
+  const payload = {
+    type: 'peer_smoke_test',
+    fromPeerId: localPeerId,
+    message: 'hello from peer',
+    at: Date.now()
+  };
+  try {
+    target.dc.send(JSON.stringify(payload));
+    log(`Smoke test sent to ${target.peerId.slice(0, 8)}…: "hello from peer"`);
+  } catch (e) {
+    log(`Smoke test send failed: ${e?.message || e}`);
+  }
+}
+
 function updatePeers() {
   const countEl = document.getElementById('peerCount');
   const listEl = document.getElementById('peers');
@@ -1898,6 +1925,32 @@ async function handleMessage(msg, dc) {
       await saveCheckpoint();
       break;
     }
+    case 'peer_smoke_test': {
+      const from = (msg.fromPeerId || dc?._remotePeerId || 'unknown').slice(0, 8);
+      const text = String(msg.message || '');
+      log(`Smoke test message received from ${from}…: "${text}"`);
+      try {
+        if (dc && dc.readyState === 'open') {
+          dc.send(
+            JSON.stringify({
+              type: 'peer_smoke_test_ack',
+              fromPeerId: localPeerId,
+              receivedMessage: text,
+              at: Date.now()
+            })
+          );
+        }
+      } catch (e) {
+        log(`Smoke test ACK send failed: ${e?.message || e}`);
+      }
+      break;
+    }
+    case 'peer_smoke_test_ack': {
+      const from = (msg.fromPeerId || dc?._remotePeerId || 'unknown').slice(0, 8);
+      const text = String(msg.receivedMessage || '');
+      log(`Smoke test ACK from ${from}… (message received): "${text}"`);
+      break;
+    }
     default:
       break;
   }
@@ -2478,6 +2531,7 @@ window.consoleCodingPrompt = consoleCodingPrompt;
 window.promptCoding = consoleCodingPrompt;
 window.askCodingLLM = askCodingLLM;
 window.stopAskCodingLLM = stopAskCodingLLM;
+window.runPeerHelloSmokeTest = runPeerHelloSmokeTest;
 
 ensureWebGPUAdapterCompat();
 

@@ -51,6 +51,14 @@ Same Wi‑Fi → open invite link or scan QR → page tries **auto-join**; if no
 **4. Shared job**  
 Only the device marked **(host)** under *Devices in this room* can click **Start shared job**.
 
+**5. Connection smoke test (first real milestone)**
+
+- After room shows **2+ devices**, open **Activity log** and click **Run hello test**.
+- This device sends `"hello from peer"` to all connected peers.
+- Success criteria in logs:
+  - sender logs `Smoke test sent to N peer(s): "hello from peer"`
+  - receiver logs `Smoke test received from ...: "hello from peer"`
+
 **Troubleshooting:** `?nosw=1` bypasses the service worker. Port on the phone must match `serve_with_signal.py` (default 8000). See `index.html` troubleshooting block.
 
 ## Fallback: plain HTTP only
