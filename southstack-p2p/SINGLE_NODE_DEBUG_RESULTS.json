@@ -1,0 +1,184 @@
+{
+  "pass": true,
+  "mode": "fully-real",
+  "signalReachable": true,
+  "fallbackEnabled": false,
+  "active_peers": 1,
+  "source": "synthetic",
+  "source_repo": null,
+  "total_files_processed": 10,
+  "total_lines_processed": 10020,
+  "total_issues_found": 10,
+  "total_fixes_suggested": 10,
+  "parsed_functions": 0,
+  "agents_completed": "1/1",
+  "peers": [
+    {
+      "id": "peer-1",
+      "mode": "real"
+    }
+  ],
+  "modules_processed": 10,
+  "analyzer_hits": 10,
+  "fixer_suggestions": 10,
+  "failures": {
+    "analyze": 0,
+    "fix": 0,
+    "total": 0
+  },
+  "peer3_lifecycle": [],
+  "per_peer_stats": {
+    "peer-1": {
+      "tasks": 20,
+      "time_ms": 2.96,
+      "status": "done",
+      "analyze_tasks": 10,
+      "fix_tasks": 10
+    }
+  },
+  "logs": [
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_01.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_02.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_03.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_04.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_05.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_06.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_07.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_08.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_09.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_10.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_01.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_02.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_03.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_04.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_05.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_06.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_07.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_08.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_09.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_10.js",
+      "ok": true
+    }
+  ],
+  "generated_at": "2026-03-30T21:21:00.737Z",
+  "estimated_time_saved_vs_single_node_pct": 0,
+  "elapsed_ms": 371.51
+}

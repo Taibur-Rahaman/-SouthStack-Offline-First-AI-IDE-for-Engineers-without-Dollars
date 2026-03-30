@@ -1,98 +1,30 @@
-# Peer-to-Peer Agentic Coding (SouthStack P2P)
+# SouthStack P2P (unified app)
 
-Browser-based multi-device coding assistant: **small LLMs via WebGPU (WebLLM)** + **WebRTC data channels** for shared jobs—plan → delegate subtasks → merge. **No cloud LLM API**; prompts and shared task traffic go **peer-to-peer**.
+This folder is the **single** SouthStack browser application. The former **`southstack/`** and **`southstack-demo/`** trees redirect here and their console APIs are implemented in **`main.js`**.
 
-## New User Quick Run
-
-For first-time users, use this exact flow:
-
-1. Start server:
-   ```bash
-   cd southstack-p2p
-   python3 serve_with_signal.py
-   ```
-   Windows:
-   ```bash
-   cd southstack-p2p
-   py -3 serve_with_signal.py
-   ```
-2. Host opens `http://127.0.0.1:8000`.
-3. Click **Start session — show link & QR**.
-4. Guest device (same Wi-Fi) opens invite link or scans QR, then taps **Join room**.
-5. Confirm **Devices in this room** shows `2+`.
-6. Ask from chat box; Stop works from host or guest.
-
-If stale assets appear, open once with `?nosw=1`.
-
-## Features
-
-- **Multi-laptop / phone guest:** WebRTC mesh; **leader** starts **Start shared job**; guests help run subtasks when they have WebGPU.
-- **Local WebGPU LLMs:** WebLLM with small quantized models (see `main.js` `CONFIG.modelCandidates`).
-- **Fault-tolerance (prototype):** Leader election (lowest peer id), state broadcast, IndexedDB checkpoints.
-- **Offline after cache:** App shell + models cached via service worker + browser storage; first run needs network for CDN/model weights.
-
-## Quick start (two laptops — recommended)
-
-**1. Start signaling + static files** (needed for auto invite / QR / phone join):
+## Run
 
 ```bash
-cd southstack-p2p
 python3 serve_with_signal.py
 ```
 
-Default: **http://0.0.0.0:8000** → use `http://<YOUR_LAN_IP>:8000` on other devices.
+Open `http://127.0.0.1:8000` (add `?nosw=1` if assets look stale).
 
-**2. Host**  
-Open that URL in Chrome → **Start session — show link & QR** → set **LAN URL for phones** if needed → **Apply to invite link & QR**.
+## Features (all variants in one)
 
-**3. Guest**  
-Same Wi‑Fi → open invite link or scan QR → page tries **auto-join**; if not, scroll to **Guest → Join room** and tap it.
+| Area | What |
+|------|------|
+| **P2P** | WebRTC data channels, rooms, coordinator election, shared jobs, checkpoints |
+| **WebGPU LLM** | WebLLM via CDN; model list in `CONFIG.modelCandidates` in `main.js` |
+| **Legacy `ask()`** | `window.ask("prompt")` — same idea as old **southstack-demo**: user-only message, streamed to console (no coding filter) |
+| **`promptCoding()`** | Coding assistant path with system prompt + non-coding filter |
+| **`SouthStack` API** | `SouthStack.getSystemStatus()`, `SouthStack.clearRuntimeCaches()`, etc. |
 
-**4. Shared job**  
-Only the device marked **(host)** under *Devices in this room* can click **Start shared job**.
-
-**Troubleshooting:** `?nosw=1` bypasses the service worker. Port on the phone must match `serve_with_signal.py` (default 8000). See `index.html` troubleshooting block.
-
-## Fallback: plain HTTP only
+## Tools (repo root)
 
 ```bash
-python3 -m http.server 8000 --bind 0.0.0.0
+npm install
+npm run run-debug -- --distributed --quiet-json
 ```
 
-No `/api/southstack/*` → use **Advanced — manual WebRTC text** (copy offer/answer between devices).
-
-## Architecture
-
-```
-Browser A ─WebRTC── Browser B ─WebRTC── Browser C
-  | WebGPU LLM |      | WebGPU LLM |      | WebGPU LLM |
-       Plan task → delegate subtasks → merge → shared result
-```
-
-Optional **LAN HTTP** in `serve_with_signal.py`: **SDP signaling only**, not model inference.
-
-## Tech stack
-
-- **LLM:** WebLLM (`@mlc-ai/web-llm`) + MLC model IDs in `CONFIG.modelCandidates`
-- **P2P:** WebRTC (`RTCPeerConnection`, ordered data channel `agents`)
-- **Signaling:** `serve_with_signal.py` → `POST/GET /api/southstack/offer|answer`
-- **Storage:** IndexedDB checkpoints (`dbName` in `main.js`)
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `index.html` | **Single homepage** — UI, invite flow, Help & AI manual (`#help-guide`), troubleshooting |
-| `main.js` | WebLLM, WebRTC, leader, subtasks, sync |
-| `sw.js` | Cache strategy; bump version when changing |
-| `webgpu-early-compat.js` | WebGPU adapter shims for WebLLM |
-| `manifest.json` | PWA metadata |
-| `serve_with_signal.py` | Static + minimal signaling API |
-| `start-server.sh` | Runs `serve_with_signal.py` by default |
-
-## Requirements
-
-- Chrome (or Chromium) with **WebGPU**, same LAN for typical demos
-- STUN: Google default unless `?offline=1` on all peers (LAN-only ICE)
-
-CSE327 — multi-agent / distributed collaboration prototype.
+See also `FINAL_DEMO_BRIEF.md` and `../SUBMISSION_README.md`.

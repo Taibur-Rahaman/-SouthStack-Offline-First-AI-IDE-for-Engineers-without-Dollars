@@ -130,16 +130,33 @@ const CONFIG = {
   /** Phones / Wi‑Fi often need >5s to gather host/srflx candidates; short timeout → incomplete SDP → no data channel → “stuck alone”. */
   iceGatherTimeoutMs: 15000,
   dbName: 'southstack-p2p',
-  dbStore: 'checkpoints'
+  dbStore: 'checkpoints',
+  /** Legacy `ask()` / southstack & southstack-demo console API (user-only message, no coding filter). */
+  legacyMaxTokens: 512,
+  legacyTemperature: 0.2,
+  legacyTopP: 0.95,
+  /** Warn in diagnostics when device RAM is below this (GB). */
+  minRAMGB: 6
 };
 
 function rtcIceServers() {
-  return CONFIG.stun.map(u => ({ urls: u }));
+  const servers = CONFIG.stun.map(u => ({ urls: u }));
+  try {
+    // Optional TURN fallback for NAT traversal.
+    // Set in DevTools before starting: window.SOUTHSTACK_TURN = { urls, username, credential }
+    const turn = typeof window !== 'undefined' ? window.SOUTHSTACK_TURN : null;
+    if (turn && turn.urls) servers.push(turn);
+  } catch {
+    /* ignore */
+  }
+  return servers;
 }
 
 /** @type {import('@mlc-ai/web-llm').MLCEngine} */
 let engine = null;
 let modelLoaded = false;
+/** Last WebLLM model id that successfully loaded (for SouthStack.getSystemStatus). */
+let lastLoadedModelId = null;
 /** Serializes concurrent initEngine() (page init + Ask button). */
 let engineInitInFlight = null;
 /** When `'ask'`, WebLLM init progress updates #askLlmLoadBanner. */
@@ -161,19 +178,133 @@ function newLocalPeerId() {
   }
   return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 14)}`;
 }
+
+function newSessionAuthToken() {
+  const rand = Math.random().toString(36).slice(2, 12);
+  return `atk_${Date.now().toString(36)}_${rand}`;
+}
+
+function splitLargeContextText(text, chunkChars = 6000) {
+  const src = String(text || '').trim();
+  if (!src) return [];
+  if (src.length <= chunkChars) return [src];
+  const chunks = [];
+  for (let i = 0; i < src.length; i += chunkChars) {
+    chunks.push(src.slice(i, i + chunkChars));
+  }
+  return chunks;
+}
+
+function splitContextByModuleAffinity(text, chunkChars = 6000) {
+  const src = String(text || '').trim();
+  if (!src) return [];
+  const lines = src.split('\n');
+  const moduleHeaderRe =
+    /^`?([A-Za-z0-9_./-]+\.(?:js|mjs|cjs|ts|tsx|jsx|py|java|go|rs|cpp|cc|c|h|hpp|md|json|ya?ml|toml|html|css|scss|sh))`?\s*[:|-]?/i;
+  const groups = [];
+  let current = { module: 'general', lines: [] };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const hit = trimmed.match(moduleHeaderRe);
+    if (hit && current.lines.length > 0) {
+      groups.push(current);
+      current = { module: hit[1], lines: [line] };
+      continue;
+    }
+    if (hit && current.lines.length === 0) {
+      current.module = hit[1];
+      current.lines.push(line);
+      continue;
+    }
+    current.lines.push(line);
+  }
+  if (current.lines.length > 0) groups.push(current);
+
+  const out = [];
+  for (const g of groups) {
+    const block = g.lines.join('\n').trim();
+    if (!block) continue;
+    if (block.length <= chunkChars) {
+      out.push({ module: g.module, text: block });
+      continue;
+    }
+    for (let i = 0; i < block.length; i += chunkChars) {
+      out.push({
+        module: g.module,
+        text: block.slice(i, i + chunkChars)
+      });
+    }
+  }
+  return out;
+}
+
+function buildContextRoutedSubtasks(task) {
+  const moduleChunks = splitContextByModuleAffinity(task, 6000);
+  const chunks =
+    moduleChunks.length > 0
+      ? moduleChunks
+      : splitLargeContextText(task, 6000).map(text => ({ module: 'general', text }));
+  return chunks.map((chunk, i) => ({
+    id: i,
+    text:
+      `Context shard ${i + 1}/${chunks.length} [module: ${chunk.module}]: analyze this code/context shard and extract relevant implementation notes, risks, and edits.\n\n` +
+      chunk.text,
+    assignedTo: null,
+    status: 'pending'
+  }));
+}
+
+function compactStateForWire(raw) {
+  const state = structuredClone(raw);
+  const maxPartial = 2000;
+  if (state?.generation?.partialOutput && state.generation.partialOutput.length > maxPartial) {
+    state.generation.partialOutput = state.generation.partialOutput.slice(-maxPartial);
+  }
+  if (Array.isArray(state?.llmChat?.items) && state.llmChat.items.length > 20) {
+    state.llmChat.items = state.llmChat.items.slice(-20);
+  }
+  if (typeof state?.llmChat?.streamPartial === 'string' && state.llmChat.streamPartial.length > maxPartial) {
+    state.llmChat.streamPartial = state.llmChat.streamPartial.slice(-maxPartial);
+  }
+  return state;
+}
 let localPeerId = newLocalPeerId();
+if (typeof window !== 'undefined' && typeof window.DEBUG_P2P !== 'boolean') {
+  window.DEBUG_P2P = false;
+}
 let localConnection = null;
 /** @type {Map<string, RTCDataChannel>} peerId -> channel (remote peers) */
 const channelsByPeer = new Map();
 /** @type {Map<string, RTCPeerConnection>} peerId -> peer connection */
 const peerConnectionsByPeer = new Map();
+/** @type {Map<string, { taskId: string, subtaskId: number, attempt: number, assignee: string, startedAt: number, timer: number | null, acked: boolean }>} */
+const pendingTaskAcks = new Map();
+/** @type {Set<string>} track processed task messages (idempotency) */
+const seenTaskMessageIds = new Set();
+/** @type {Map<number, string>} local cache for duplicate subtask retries */
+const completedSubtaskCache = new Map();
+/** Stable idempotency key per task execution: `${taskId}:${subtaskId}` */
+const executedTasks = new Set();
+/** @type {Map<string, number>} peerId -> ping sent timestamp */
+const pendingTransportPings = new Map();
+/** @type {Map<string, { rttMs: number, inflight: number, done: number, fail: number, lastSeenAt: number, webgpu: boolean }>} */
+const peerStats = new Map();
 /** @type {RTCPeerConnection | null} */
 let pendingLeaderConnection = null;
+/** Coordinator election state */
+let currentCoordinator = null; // peerId of current coordinator
+let coordinatorCandidates = []; // list of peers with WebGPU capable of being coordinator
+let localHasWebGPU = false; // whether THIS device has WebGPU
+let isLocalCoordinator = false; // true if this device is currently the coordinator
 let syncTimer = null;
 let signalBus = null;
 let latestOfferSdp = '';
 let hostAnswerPollTimer = null;
+/** peer key -> candidate polling timer */
+const candidatePollers = new Map();
 let joinRoomInProgress = false;
+let lastTransportHeartbeatAt = 0;
 /** Cleared when P2P hello / data channel proves we are not isolated. */
 let p2pLinkWatchdogTimer = null;
 /** Guest: last Ask request id (for coordinator reject messages). */
@@ -184,6 +315,41 @@ let leaderLlmTail = Promise.resolve();
 let pendingGuestPrompt = null;
 /** Current Ask stream stop hook (leader/solo). */
 let activeSharedAskStop = null;
+/** Auto-reconnect timer when link drops. */
+let reconnectTimer = null;
+let reconnectAttempt = 0;
+let sessionAuthToken = '';
+/** @type {Map<string, boolean>} */
+const authenticatedPeers = new Map();
+
+const SESSION_KEY = 'southstack-p2p-last-session';
+const TASK_RETRY_MAX = 3;
+const TASK_ACK_TIMEOUT_MS = 3500;
+const RECONNECT_BACKOFF_MS = [1500, 3000, 5000, 8000, 13000];
+const RECONNECT_MAX_ATTEMPTS = 20;
+const TRANSPORT_HEARTBEAT_MS = 4000;
+const TRANSPORT_STALE_MS = 16000;
+const LOCAL_CONTEXT_MAX_CHARS = 18000;
+const METRICS_DB_KEY = 'southstack-p2p-metrics-latest';
+
+function dbgP2P(...args) {
+  if (typeof window !== 'undefined' && window.DEBUG_P2P) {
+    console.debug('[P2P DEBUG]', ...args);
+  }
+}
+
+let metricsState = {
+  taskId: null,
+  startedAt: 0,
+  finishedAt: 0,
+  responseTimeMs: 0,
+  retries: 0,
+  failures: 0,
+  transportDrops: 0,
+  subtaskCount: 0,
+  peerUtilization: {}, // peerId -> { assigned, completed, failed }
+  outputQualityNotes: []
+};
 
 function clearSharedAskBusyState() {
   sharedState.llmChat.busy = false;
@@ -254,6 +420,114 @@ function waitForSubtaskDone(subtaskId, ms) {
     });
   });
 }
+
+function makeTaskMessageId(subtaskId, assignee, attempt) {
+  return `task_${sharedState.taskId || 'na'}_${subtaskId}_${assignee}`;
+}
+
+function hashTaskKey(text = '', type = 'execute') {
+  const src = `${type}:${String(text)}`;
+  let h = 2166136261;
+  for (let i = 0; i < src.length; i += 1) {
+    h ^= src.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `tsk_${(h >>> 0).toString(16)}`;
+}
+
+function inferTaskType(subtaskText = '') {
+  const t = String(subtaskText || '').toLowerCase();
+  if (t.includes('[analyzer]')) return 'analyze';
+  if (t.includes('[fixer]')) return 'fix';
+  return 'execute';
+}
+
+function waitForTaskAck(messageId, timeoutMs) {
+  return new Promise(resolve => {
+    const pending = pendingTaskAcks.get(messageId);
+    if (!pending) {
+      resolve(false);
+      return;
+    }
+    pending.timer = setTimeout(() => {
+      const nowPending = pendingTaskAcks.get(messageId);
+      if (!nowPending) {
+        resolve(false);
+        return;
+      }
+      if (nowPending.acked) {
+        pendingTaskAcks.delete(messageId);
+        resolve(true);
+        return;
+      }
+      pendingTaskAcks.delete(messageId);
+      resolve(false);
+    }, timeoutMs);
+  });
+}
+
+async function sendSubtaskWithRetry(st, assignee) {
+  ensurePeerMetric(assignee);
+  metricsState.peerUtilization[assignee].assigned += 1;
+  const ch = channelsByPeer.get(assignee);
+  if (!ch || ch.readyState !== 'open') {
+    metricsState.failures += 1;
+    metricsState.peerUtilization[assignee].failed += 1;
+    touchPeerStat(assignee, { fail: (peerStats.get(assignee)?.fail || 0) + 1 });
+    return false;
+  }
+  const taskType = inferTaskType(st.text);
+  const stableTaskId = hashTaskKey(st.text, taskType);
+  for (let attempt = 1; attempt <= TASK_RETRY_MAX; attempt += 1) {
+    const messageId = makeTaskMessageId(st.id, assignee, attempt);
+    const startedAt = Date.now();
+    pendingTaskAcks.set(messageId, {
+      taskId: sharedState.taskId || 'na',
+      subtaskId: st.id,
+      attempt,
+      assignee,
+      startedAt,
+      timer: null,
+      acked: false
+    });
+    touchPeerStat(assignee, { inflight: (peerStats.get(assignee)?.inflight || 0) + 1 });
+    const sent = sendOnChannel(ch, {
+      id: messageId,
+      type: 'subtask',
+      taskId: sharedState.taskId || 'na',
+      subtaskId: st.id,
+      taskType,
+      stableTaskId,
+      payload: st.text,
+      messageId,
+      attempt
+    }, assignee);
+    if (!sent) {
+      pendingTaskAcks.delete(messageId);
+      touchPeerStat(assignee, { inflight: Math.max(0, (peerStats.get(assignee)?.inflight || 1) - 1) });
+      return false;
+    }
+    const acked = await waitForTaskAck(messageId, TASK_ACK_TIMEOUT_MS * attempt);
+    if (acked) {
+      const rtt = Date.now() - startedAt;
+      const prev = peerStats.get(assignee)?.rttMs || TASK_ACK_TIMEOUT_MS;
+      touchPeerStat(assignee, {
+        rttMs: Math.round((prev * 0.7) + (rtt * 0.3)),
+        inflight: Math.max(0, (peerStats.get(assignee)?.inflight || 1) - 1)
+      });
+      return true;
+    }
+    metricsState.retries += 1;
+    touchPeerStat(assignee, {
+      fail: (peerStats.get(assignee)?.fail || 0) + 1,
+      inflight: Math.max(0, (peerStats.get(assignee)?.inflight || 1) - 1)
+    });
+    log(`Retrying subtask ${st.id} on device ${assignee.slice(0, 8)}… (${attempt}/${TASK_RETRY_MAX})`);
+  }
+  metricsState.failures += 1;
+  metricsState.peerUtilization[assignee].failed += 1;
+  return false;
+}
 /** @type {boolean | null} */
 
 /** peerId → WebGPU available (from hello); coordinator prefers lowest id among true. */
@@ -274,13 +548,219 @@ const P2PAgents = {
 
 async function detectLocalWebGpuLikely() {
   try {
-    if (typeof navigator === 'undefined' || !navigator.gpu) return false;
+    if (typeof navigator === 'undefined' || !navigator.gpu) {
+      localHasWebGPU = false;
+      return false;
+    }
     const adapter = await navigator.gpu.requestAdapter();
-    return !!adapter;
+    localHasWebGPU = !!adapter;
+    return localHasWebGPU;
   } catch {
+    localHasWebGPU = false;
     return false;
   }
 }
+
+// ---------- Coordinator Election & Failover ----------
+/**
+ * Elect a new coordinator from available peers with WebGPU.
+ * Election rules:
+ * 1. Only peers with WebGPU can be coordinator
+ * 2. Prefer peer with lowest peerId (deterministic)
+ * 3. If no peer has WebGPU, system waits until one joins
+ * 4. Automatic failover when coordinator disconnects
+ */
+async function electNewCoordinator() {
+  log('🗳️ Starting coordinator election...');
+  
+  // Build list of coordinator-capable peers
+  coordinatorCandidates = [];
+  
+  // Add local peer if it has WebGPU
+  if (localHasWebGPU) {
+    coordinatorCandidates.push({
+      peerId: localPeerId,
+      isLocal: true,
+      webgpu: true
+    });
+  }
+  
+  // Add remote peers with WebGPU capability
+  peerStats.forEach((stats, peerId) => {
+    if (stats.webgpu && channelsByPeer.has(peerId)) {
+      coordinatorCandidates.push({
+        peerId,
+        isLocal: false,
+        webgpu: true
+      });
+    }
+  });
+  
+  if (coordinatorCandidates.length === 0) {
+    log('⚠️ No WebGPU-capable devices in room. Waiting for capable device to join...');
+    currentCoordinator = null;
+    isLocalCoordinator = false;
+    updateCoordinatorUI();
+    return null;
+  }
+  
+  // Sort by peerId (deterministic - lowest ID wins)
+  coordinatorCandidates.sort((a, b) => a.peerId.localeCompare(b.peerId));
+  
+  // Elect winner
+  const winner = coordinatorCandidates[0];
+  currentCoordinator = winner.peerId;
+  isLocalCoordinator = winner.isLocal;
+  
+  log(`✅ Elected new coordinator: ${winner.peerId.slice(0, 8)}... (${winner.isLocal ? 'this device' : 'remote device'})`);
+  
+  // Broadcast election result to all peers
+  broadcastCoordinatorInfo();
+  
+  // Update UI
+  updateCoordinatorUI();
+  
+  // If this device became coordinator, initialize engine
+  if (isLocalCoordinator && !engine) {
+    log('🤖 This device is now coordinator - initializing WebGPU LLM...');
+    try {
+      await initEngine();
+      log('✅ Coordinator LLM ready');
+    } catch (err) {
+      log('❌ Coordinator failed to initialize LLM:', err);
+      // Trigger re-election if this device can't run
+      await electNewCoordinator();
+    }
+  }
+  
+  return currentCoordinator;
+}
+
+/** Broadcast coordinator election result to all connected peers */
+function broadcastCoordinatorInfo() {
+  const message = {
+    type: 'coordinator_elected',
+    coordinatorPeerId: currentCoordinator,
+    timestamp: Date.now(),
+    candidates: coordinatorCandidates.map(c => ({
+      peerId: c.peerId,
+      hasWebGPU: c.webgpu
+    }))
+  };
+  
+  // Send to all connected peers
+  channelsByPeer.forEach((channel, peerId) => {
+    if (channel.readyState === 'open') {
+      sendOnChannel(channel, message, peerId);
+    }
+  });
+  
+  // Also update shared state
+  sharedState.coordinator = currentCoordinator;
+  broadcastState();
+}
+
+/** Handle incoming coordinator election message */
+function handleCoordinatorElection(data) {
+  const { coordinatorPeerId, candidates } = data;
+  
+  if (!coordinatorPeerId) {
+    log('⚠️ Received invalid coordinator election message');
+    return;
+  }
+  
+  currentCoordinator = coordinatorPeerId;
+  isLocalCoordinator = (currentCoordinator === localPeerId);
+  
+  log(`📢 Coordinator updated: ${coordinatorPeerId.slice(0, 8)}... (${isLocalCoordinator ? 'this device' : 'remote device'})`);
+  
+  updateCoordinatorUI();
+  
+  // If this device should be coordinator but isn't initialized yet
+  if (isLocalCoordinator && !engine) {
+    log('🤖 Becoming coordinator - initializing LLM...');
+    initEngine().catch(err => {
+      log('❌ Failed to initialize as coordinator:', err);
+      // Clear coordinator status and trigger re-election
+      currentCoordinator = null;
+      isLocalCoordinator = false;
+      setTimeout(() => electNewCoordinator(), 2000);
+    });
+  }
+}
+
+/** Update UI to show coordinator status */
+function updateCoordinatorUI() {
+  const coordinatorBanner = document.getElementById('coordinatorBanner');
+  const askButton = document.getElementById('startSharedJobBtn');
+  
+  if (!currentCoordinator) {
+    if (coordinatorBanner) {
+      coordinatorBanner.innerHTML = `
+        <div style="padding:12px;background:rgba(255,159,10,0.2);border:2px solid #ff9f0a;border-radius:8px;margin:10px 0;">
+          <strong>⏳ Waiting for WebGPU device...</strong><br>
+          <small>No device with WebGPU is currently connected. Connect another device or enable WebGPU on this device.</small>
+        </div>`;
+      coordinatorBanner.style.display = 'block';
+    }
+    if (askButton) askButton.disabled = true;
+  } else {
+    const coordShort = currentCoordinator.slice(0, 8);
+    const isRemote = !isLocalCoordinator;
+    
+    if (coordinatorBanner) {
+      const icon = isRemote ? '📱' : '💻';
+      const status = isRemote ? 'connected to' : 'running on';
+      coordinatorBanner.innerHTML = `
+        <div style="padding:12px;background:rgba(0,168,132,0.2);border:2px solid #00a884;border-radius:8px;margin:10px 0;">
+          <strong>${icon} AI Coordinator: ${status} device ${coordShort}...</strong><br>
+          <small>${isRemote ? 'Your prompts will be sent to this device for processing.' : 'You are running the AI for all connected devices.'}</small>
+        </div>`;
+      coordinatorBanner.style.display = 'block';
+    }
+    if (askButton) askButton.disabled = false;
+  }
+  
+  // Update peer list to show coordinator marker
+  updatePeers();
+}
+
+/** Check if we need to trigger coordinator election */
+function checkCoordinatorNeeded() {
+  // No coordinator currently
+  if (!currentCoordinator) {
+    log('🔍 No coordinator - triggering election');
+    electNewCoordinator();
+    return;
+  }
+  
+  // Current coordinator disconnected
+  if (!channelsByPeer.has(currentCoordinator) && currentCoordinator !== localPeerId) {
+    log('⚠️ Coordinator disconnected! Triggering failover election...');
+    currentCoordinator = null;
+    setTimeout(() => electNewCoordinator(), 500);
+    return;
+  }
+  
+  // Coordinator exists but may not have WebGPU (shouldn't happen, but safety check)
+  const coordStats = peerStats.get(currentCoordinator);
+  if (coordStats && !coordStats.webgpu && currentCoordinator !== localPeerId) {
+    log('⚠️ Coordinator lost WebGPU capability - re-electing...');
+    currentCoordinator = null;
+    setTimeout(() => electNewCoordinator(), 500);
+  }
+}
+
+/** Enhanced peer connection handler that triggers coordinator election */
+const originalAddPeer = window.addPeer || function(peerId, connection) {};
+window.addPeer = function(peerId, connection) {
+  originalAddPeer(peerId, connection);
+  
+  // After adding peer, check if coordinator election is needed
+  setTimeout(() => {
+    checkCoordinatorNeeded();
+  }, 1000);
+};
 
 /** Distributed task + generation state (CRDT-friendly: version bumps on writer) */
 let sharedState = {
@@ -352,6 +832,24 @@ async function loadCheckpoint(taskId) {
   } catch {
     return null;
   }
+}
+
+async function restoreCheckpointIfAny(taskId = null) {
+  const restored = await loadCheckpoint(taskId || 'default');
+  if (!restored || typeof restored !== 'object') return false;
+  sharedState = {
+    ...sharedState,
+    ...restored,
+    subtasks: Array.isArray(restored.subtasks) ? restored.subtasks.map(s => ({ ...s })) : [],
+    generation: restored.generation ? { ...sharedState.generation, ...restored.generation } : sharedState.generation,
+    llmChat: restored.llmChat ? cloneLlmChat(restored.llmChat) : cloneLlmChat(sharedState.llmChat)
+  };
+  if (sharedState.generation?.partialOutput) {
+    setOutput(sharedState.generation.partialOutput);
+  }
+  refreshAskLlmDisplay();
+  updatePeers();
+  return true;
 }
 
 // ---------- UI ----------
@@ -427,6 +925,9 @@ function buildJoinLink(roomId) {
   url.searchParams.set('room', roomId);
   url.searchParams.set('join', '1');
   url.searchParams.set('invite', '1');
+  if (sessionAuthToken) {
+    url.searchParams.set('auth', sessionAuthToken);
+  }
   return url.toString();
 }
 
@@ -629,7 +1130,8 @@ function updatePeers() {
       const tag = id === localPeerId ? ' (this device)' : '';
       const lead = id === P2PAgents.leaderId ? ' (coordinator)' : '';
       const gpu = peerWebGpuByPeer.get(id) === true ? ' · WebGPU' : '';
-      return `<div class="peer">Device ${short}${tag}${lead}${gpu}</div>`;
+      const isCoord = id === currentCoordinator ? ' 👑 AI Coordinator' : '';
+      return `<div class="peer">Device ${short}${tag}${lead}${isCoord}${gpu}</div>`;
     });
     listEl.innerHTML = rows.join('');
   }
@@ -643,6 +1145,9 @@ function updatePeers() {
   }
   updateHostGuestTaskUi();
   refreshAskLlmDisplay();
+  
+  // Check if coordinator election is needed
+  setTimeout(() => checkCoordinatorNeeded(), 1000);
 }
 
 function updateHostGuestTaskUi() {
@@ -888,8 +1393,21 @@ async function runSharedLlmOnLeader(prompt, fromPeerId) {
 }
 
 // ---------- Leader election: prefer WebGPU-capable peers, then lowest id (deterministic) ----------
+/** Peers we can actually message (open data channel), plus self. Gossip may list others in star topology. */
+function connectedPeerIdsForElection() {
+  const connected = new Set([localPeerId, ...channelsByPeer.keys()]);
+  return Array.from(P2PAgents.knownPeerIds).filter(id => connected.has(id));
+}
+
+function isPeerReachableForWork(peerId) {
+  if (!peerId) return false;
+  if (peerId === localPeerId) return true;
+  const ch = channelsByPeer.get(peerId);
+  return !!(ch && ch.readyState === 'open');
+}
+
 function computeLeader() {
-  const ids = Array.from(P2PAgents.knownPeerIds);
+  let ids = connectedPeerIdsForElection();
   if (ids.length === 0) return localPeerId;
   const withGpu = ids.filter(id => peerWebGpuByPeer.get(id) === true);
   const pool = withGpu.length > 0 ? withGpu : ids;
@@ -918,17 +1436,240 @@ function applyLeader() {
   updatePeers();
 }
 
-// ---------- Messaging ----------
-function broadcast(obj) {
-  const payload = JSON.stringify(obj);
-  for (const dc of channelsByPeer.values()) {
-    if (dc.readyState === 'open') {
-      try {
-        dc.send(payload);
-      } catch (e) {
-        console.warn('send failed', e);
+function touchPeerStat(peerId, patch = {}) {
+  if (!peerId) return;
+  const prev = peerStats.get(peerId) || {
+    rttMs: TASK_ACK_TIMEOUT_MS,
+    inflight: 0,
+    done: 0,
+    fail: 0,
+    lastSeenAt: Date.now(),
+    webgpu: peerWebGpuByPeer.get(peerId) === true
+  };
+  const next = { ...prev, ...patch, lastSeenAt: Date.now() };
+  peerStats.set(peerId, next);
+}
+
+function getPeerDispatchScore(peerId) {
+  if (!peerId) return Number.NEGATIVE_INFINITY;
+  const stat = peerStats.get(peerId) || {
+    rttMs: TASK_ACK_TIMEOUT_MS,
+    inflight: 0,
+    done: 0,
+    fail: 0,
+    webgpu: peerWebGpuByPeer.get(peerId) === true
+  };
+  const gpuBoost = stat.webgpu ? 0.4 : 0;
+  const reliability = Math.max(0, stat.done - stat.fail) * 0.05;
+  const inflightPenalty = stat.inflight * 0.35;
+  const rttPenalty = Math.min(1.2, (stat.rttMs || TASK_ACK_TIMEOUT_MS) / 10000);
+  return 1 + gpuBoost + reliability - inflightPenalty - rttPenalty;
+}
+
+function chooseAssigneeForSubtask() {
+  const candidates = Array.from(P2PAgents.knownPeerIds).filter(id => {
+    if (id === localPeerId) return true;
+    const ch = channelsByPeer.get(id);
+    return !!(ch && ch.readyState === 'open');
+  });
+  if (!candidates.length) return localPeerId;
+  candidates.sort((a, b) => getPeerDispatchScore(b) - getPeerDispatchScore(a));
+  return candidates[0] || localPeerId;
+}
+
+function persistSessionSnapshot() {
+  try {
+    const snap = {
+      roomId: P2PAgents.roomId || '',
+      invite: getJoinLinkValue(),
+      wasLeader: !!P2PAgents.isLeader,
+      authToken: sessionAuthToken || '',
+      at: Date.now()
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(snap));
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearSessionSnapshot() {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function readSessionSnapshot() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.roomId || typeof parsed.roomId !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function scheduleAutoReconnect(reason = 'link lost') {
+  if (!P2PAgents.roomId || channelsByPeer.size > 0) return;
+  if (reconnectTimer) return;
+  if (reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
+    updateStatus('Reconnect paused after many failed attempts. Use Join room or Start session.', 'disconnected');
+    log('Auto-reconnect paused after repeated failures.');
+    return;
+  }
+  const idx = Math.min(reconnectAttempt, RECONNECT_BACKOFF_MS.length - 1);
+  const baseDelay = RECONNECT_BACKOFF_MS[idx];
+  const jitter = Math.floor(Math.random() * 650);
+  const delay = baseDelay + jitter;
+  reconnectAttempt += 1;
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    if (!P2PAgents.roomId || channelsByPeer.size > 0) return;
+    log(`Auto-reconnect (${reason}) attempt ${reconnectAttempt}…`);
+    try {
+      if (P2PAgents.isLeader) {
+        await generateNextOffer();
+      } else {
+        const rid = document.getElementById('roomId');
+        if (rid) rid.value = P2PAgents.roomId;
+        await joinRoom({ fromAutoInvite: true, fromReconnect: true });
+      }
+    } catch {
+      /* joinRoom handles status */
+    } finally {
+      if (channelsByPeer.size === 0) {
+        const retryReason = P2PAgents.isLeader ? 'host offer retry' : 'join retry';
+        scheduleAutoReconnect(retryReason);
+      } else {
+        reconnectAttempt = 0;
       }
     }
+  }, delay);
+}
+
+function cancelAutoReconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempt = 0;
+}
+
+function resetMetrics(taskId) {
+  metricsState = {
+    taskId: taskId || null,
+    startedAt: Date.now(),
+    finishedAt: 0,
+    responseTimeMs: 0,
+    retries: 0,
+    failures: 0,
+    transportDrops: 0,
+    subtaskCount: 0,
+    peerUtilization: {},
+    outputQualityNotes: []
+  };
+}
+
+function ensurePeerMetric(peerId) {
+  if (!peerId) return;
+  if (!metricsState.peerUtilization[peerId]) {
+    metricsState.peerUtilization[peerId] = { assigned: 0, completed: 0, failed: 0 };
+  }
+}
+
+function noteQuality(message) {
+  if (!message) return;
+  metricsState.outputQualityNotes.push(message);
+  if (metricsState.outputQualityNotes.length > 20) {
+    metricsState.outputQualityNotes = metricsState.outputQualityNotes.slice(-20);
+  }
+}
+
+function finalizeMetricsAndPersist() {
+  metricsState.finishedAt = Date.now();
+  metricsState.responseTimeMs = Math.max(0, metricsState.finishedAt - (metricsState.startedAt || metricsState.finishedAt));
+  try {
+    localStorage.setItem(METRICS_DB_KEY, JSON.stringify(metricsState));
+  } catch {
+    /* ignore */
+  }
+}
+
+function getLatestMetrics() {
+  try {
+    const raw = localStorage.getItem(METRICS_DB_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+// ---------- Messaging ----------
+function newMessageId() {
+  return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function toWireEnvelope(raw, to = null) {
+  if (!raw || typeof raw !== 'object' || !raw.type) return null;
+  const { type, ...rest } = raw;
+  return {
+    id: raw.id || newMessageId(),
+    type,
+    payload: rest,
+    timestamp: Date.now(),
+    from: localPeerId,
+    ...(to ? { to } : {})
+  };
+}
+
+function normalizeIncomingMessage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  // Standard envelope
+  if (raw.type && raw.payload && typeof raw.payload === 'object') {
+    return {
+      id: raw.id || null,
+      type: raw.type,
+      from: raw.from || null,
+      to: raw.to || null,
+      timestamp: raw.timestamp || Date.now(),
+      ...raw.payload
+    };
+  }
+  // Backward-compatible legacy shape
+  if (raw.type) {
+    return {
+      id: raw.id || null,
+      type: raw.type,
+      from: raw.from || null,
+      timestamp: raw.timestamp || Date.now(),
+      ...raw
+    };
+  }
+  return null;
+}
+
+function sendOnChannel(dc, msg, toPeerId = null) {
+  if (!dc || dc.readyState !== 'open') return false;
+  const wire = toWireEnvelope(msg, toPeerId || dc._remotePeerId || null);
+  if (!wire) return false;
+  try {
+    dc.send(JSON.stringify(wire));
+    dbgP2P('SEND ->', wire.type, { id: wire.id, to: wire.to || null });
+    return true;
+  } catch (e) {
+    console.warn('send failed', e);
+    return false;
+  }
+}
+
+function broadcast(obj) {
+  for (const [peerId, dc] of channelsByPeer.entries()) {
+    sendOnChannel(dc, obj, peerId);
   }
 }
 
@@ -949,17 +1690,40 @@ function cloneLlmChat(raw) {
 }
 
 function mergeIncomingState(remote) {
-  if (!remote || typeof remote.version !== 'number') return;
-  if (remote.version <= sharedState.version) return;
+  if (!remote || typeof remote !== 'object') return;
+  const remoteVersion = Number(remote.version || 0);
+  const localVersion = Number(sharedState.version || 0);
+  const preferRemote = remoteVersion >= localVersion;
+  const mergedSubtasksById = new Map();
+  for (const st of Array.isArray(sharedState.subtasks) ? sharedState.subtasks : []) {
+    mergedSubtasksById.set(st.id, { ...st });
+  }
+  for (const st of Array.isArray(remote.subtasks) ? remote.subtasks : []) {
+    const prev = mergedSubtasksById.get(st.id);
+    if (!prev) {
+      mergedSubtasksById.set(st.id, { ...st });
+      continue;
+    }
+    // Preserve "done" if either side already finished.
+    const done = prev.status === 'done' || st.status === 'done';
+    mergedSubtasksById.set(st.id, {
+      ...prev,
+      ...(preferRemote ? st : prev),
+      status: done ? 'done' : (preferRemote ? st.status : prev.status),
+      result: done ? (st.result || prev.result || '') : (preferRemote ? st.result : prev.result)
+    });
+  }
   sharedState = {
-    ...remote,
-    subtasks: Array.isArray(remote.subtasks) ? remote.subtasks.map(s => ({ ...s })) : [],
+    ...sharedState,
+    ...(preferRemote ? remote : {}),
+    version: Math.max(localVersion, remoteVersion),
+    subtasks: Array.from(mergedSubtasksById.values()),
     generation: remote.generation
-      ? { ...remote.generation }
+      ? { ...sharedState.generation, ...remote.generation }
       : sharedState.generation,
     llmChat:
       remote.llmChat != null && typeof remote.llmChat === 'object'
-        ? cloneLlmChat(remote.llmChat)
+        ? cloneLlmChat(preferRemote ? remote.llmChat : { ...sharedState.llmChat, ...remote.llmChat })
         : cloneLlmChat(sharedState.llmChat)
   };
   if (pendingGuestPrompt && (sharedState.llmChat.items || []).length > 0) {
@@ -974,28 +1738,65 @@ function mergeIncomingState(remote) {
 
 /** @param {RTCDataChannel} dc */
 function sendHello(dc) {
-  const payload = JSON.stringify({
+  sendOnChannel(dc, {
     type: 'hello',
     peerId: localPeerId,
     knownPeerIds: Array.from(P2PAgents.knownPeerIds),
-    webgpu: localWebGpuLikely
+    webgpu: localWebGpuLikely,
+    authToken: sessionAuthToken || ''
   });
-  if (dc.readyState === 'open') dc.send(payload);
 }
 
 function broadcastState() {
   bumpVersion();
-  broadcast({ type: 'state', state: structuredClone(sharedState) });
+  broadcast({ type: 'state', state: compactStateForWire(sharedState) });
   saveCheckpoint();
 }
 
 function startSyncTimer() {
   if (syncTimer) clearInterval(syncTimer);
   syncTimer = setInterval(() => {
+    runTransportHealthCheck();
     if (channelsByPeer.size === 0) return;
     bumpVersion();
-    broadcast({ type: 'state', state: structuredClone(sharedState) });
+    broadcast({ type: 'state', state: compactStateForWire(sharedState) });
   }, CONFIG.syncIntervalMs);
+}
+
+function runTransportHealthCheck() {
+  if (channelsByPeer.size === 0) return;
+  const now = Date.now();
+  if (now - lastTransportHeartbeatAt < TRANSPORT_HEARTBEAT_MS) return;
+  lastTransportHeartbeatAt = now;
+  for (const [peerId, dc] of channelsByPeer.entries()) {
+    if (!peerId || !dc) continue;
+    if (dc.readyState !== 'open') {
+      onTransportGone(peerId, 'not_open');
+      continue;
+    }
+    const seenAt = peerStats.get(peerId)?.lastSeenAt || 0;
+    if (seenAt && now - seenAt > TRANSPORT_STALE_MS) {
+      log(`Transport heartbeat timeout from ${peerId.slice(0, 8)}…; dropping stale link.`);
+      try {
+        dc.close();
+      } catch {
+        /* ignore */
+      }
+      onTransportGone(peerId, 'stale_heartbeat');
+      continue;
+    }
+    try {
+      // Keep ping message in standard envelope via send helper.
+      sendOnChannel(dc, {
+        type: 'transport_ping',
+        fromPeerId: localPeerId,
+        sentAt: now
+      }, peerId);
+      pendingTransportPings.set(peerId, now);
+    } catch {
+      onTransportGone(peerId, 'ping_send_failed');
+    }
+  }
 }
 
 function waitForIceGatheringComplete(pc, timeoutMs = CONFIG.iceGatherTimeoutMs) {
@@ -1047,15 +1848,27 @@ function ensureSignalBus(roomId) {
       } catch (e) {
         log(`Could not apply guest reply automatically: ${e.message}`);
       }
+      return;
+    }
+    if (msg.type === 'candidate' && msg.candidate) {
+      const targetPc = pendingLeaderConnection || localConnection;
+      if (!targetPc) return;
+      try {
+        await targetPc.addIceCandidate(msg.candidate);
+        dbgP2P('BroadcastChannel ICE candidate applied');
+      } catch (e) {
+        dbgP2P('BroadcastChannel ICE candidate failed', String(e?.message || e));
+      }
     }
   };
 }
 
-function postSignal(type, sdp) {
-  if (!signalBus || !P2PAgents.roomId || !sdp) return;
+function postSignal(type, sdp, candidate = null) {
+  if (!signalBus || !P2PAgents.roomId) return;
   signalBus.postMessage({
     type,
     sdp,
+    candidate,
     roomId: P2PAgents.roomId,
     peerId: localPeerId
   });
@@ -1142,6 +1955,64 @@ async function apiPostAnswer(roomId, sdp) {
     body: JSON.stringify({ room: roomId, sdp })
   });
   if (!r.ok) throw new Error(`POST answer HTTP ${r.status}`);
+}
+
+async function apiPostCandidate(roomId, candidate, toPeerId = '') {
+  if (!candidate) return;
+  try {
+    await fetch('/api/southstack/candidate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        room: roomId,
+        fromPeerId: localPeerId,
+        toPeerId,
+        candidate
+      })
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+async function apiPollCandidates(roomId) {
+  try {
+    const r = await fetch(
+      `/api/southstack/candidate?room=${encodeURIComponent(roomId)}&peer=${encodeURIComponent(localPeerId)}`,
+      { cache: 'no-store' }
+    );
+    if (r.status === 204 || !r.ok) return [];
+    const j = await r.json();
+    return Array.isArray(j.candidates) ? j.candidates : [];
+  } catch {
+    return [];
+  }
+}
+
+function startCandidatePolling(key, roomId, pc) {
+  stopCandidatePolling(key);
+  if (!roomId || !pc) return;
+  const timer = setInterval(async () => {
+    if (!P2PAgents.roomId || P2PAgents.roomId !== roomId) return;
+    const list = await apiPollCandidates(roomId);
+    for (const item of list) {
+      const c = item?.candidate;
+      if (!c) continue;
+      try {
+        await pc.addIceCandidate(c);
+        dbgP2P('ICE candidate applied', { from: item.fromPeerId || null });
+      } catch (e) {
+        dbgP2P('ICE add failed', String(e?.message || e));
+      }
+    }
+  }, 700);
+  candidatePollers.set(key, timer);
+}
+
+function stopCandidatePolling(key) {
+  const timer = candidatePollers.get(key);
+  if (timer) clearInterval(timer);
+  candidatePollers.delete(key);
 }
 
 function stopHostAnswerPolling() {
@@ -1355,6 +2226,121 @@ function raceWithTimeoutFixed(promise, ms, timeoutMessage) {
   ]);
 }
 
+function formatErrorLegacy(error) {
+  if (!error) return 'Unknown error';
+  if (typeof error === 'string') return error;
+  if (error.message) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+/** From unified southstack/: clear Cache Storage (helps recover from bad SW/model cache). */
+async function clearSouthStackRuntimeCaches() {
+  try {
+    if (typeof caches !== 'undefined' && caches.keys) {
+      const names = await caches.keys();
+      await Promise.all(names.map(name => caches.delete(name)));
+    }
+  } catch (e) {
+    console.warn('[SouthStack] Cache cleanup:', formatErrorLegacy(e));
+  }
+}
+
+/** RAM hint (GB) for `SouthStack.getSystemStatus()` — same idea as legacy southstack/. */
+async function checkRAMSouthStack() {
+  try {
+    if (navigator.deviceMemory) {
+      const ramGB = navigator.deviceMemory;
+      if (ramGB < CONFIG.minRAMGB) {
+        console.warn(`[SouthStack] Low RAM: ${ramGB}GB (recommended ${CONFIG.minRAMGB}GB+)`);
+      }
+      return ramGB;
+    }
+    if (performance.memory) {
+      return performance.memory.totalJSHeapSize / (1024 * 1024 * 1024);
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/** Storage estimate for diagnostics (legacy southstack/). */
+async function checkStorageQuotaSouthStack() {
+  try {
+    if (navigator.storage && navigator.storage.estimate) {
+      const estimate = await navigator.storage.estimate();
+      return {
+        usedBytes: estimate.usage,
+        quotaBytes: estimate.quota,
+        availableBytes: Math.max(0, estimate.quota - estimate.usage)
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+/**
+ * Legacy console `ask("prompt")` from southstack/ + southstack-demo: user message only, streamed to console.
+ * Distinct from `promptCoding` / `consoleCodingPrompt` (those apply the coding-assistant system prompt).
+ */
+async function legacyConsoleAsk(prompt) {
+  const text = String(prompt || '').trim();
+  if (!text) {
+    console.warn('[SouthStack] Usage: ask("your prompt")');
+    return '';
+  }
+  console.log(`\n${'='.repeat(50)}\nPrompt: ${text}\n${'='.repeat(50)}`);
+  const runOnce = async () => {
+    await initEngine();
+    if (!engine || !modelLoaded) {
+      console.error('[SouthStack] Model not available.');
+      return '';
+    }
+    const stream = await engine.chat.completions.create({
+      messages: [{ role: 'user', content: text }],
+      max_tokens: CONFIG.legacyMaxTokens,
+      temperature: CONFIG.legacyTemperature,
+      top_p: CONFIG.legacyTopP,
+      stream: true
+    });
+    let full = '';
+    for await (const chunk of stream) {
+      const delta = chunk.choices?.[0]?.delta?.content || '';
+      if (delta) {
+        full += delta;
+        console.log(delta);
+      }
+    }
+    console.log(`\n${'-'.repeat(40)}\nResponse complete (${full.length} characters).`);
+    return full;
+  };
+  try {
+    return await runOnce();
+  } catch (error) {
+    const msg = String(error?.message || error || '');
+    if (/memory|OOM|out of memory/i.test(msg)) {
+      console.warn('[SouthStack] Memory error — resetting engine and retrying once…');
+      engine = null;
+      modelLoaded = false;
+      engineInitInFlight = null;
+      try {
+        return await runOnce();
+      } catch (e2) {
+        console.error('[SouthStack] ask() failed:', formatErrorLegacy(e2));
+        throw e2;
+      }
+    }
+    console.error('[SouthStack] ask() failed:', formatErrorLegacy(error));
+    throw error;
+  }
+}
+
 async function initEngine() {
   if (modelLoaded && engine) return;
   if (!navigator.gpu) throw new Error(WEBGPU_UNAVAILABLE_MESSAGE);
@@ -1391,6 +2377,7 @@ async function initEngine() {
             dbgLogP2p('H7', 'p2p/initEngine:afterCreate', 'CreateMLCEngine ok', { modelId });
             // #endregion
             modelLoaded = true;
+            lastLoadedModelId = modelId;
             log(`AI model ready (${modelId}).`);
             return;
           } catch (err) {
@@ -1417,12 +2404,25 @@ async function initEngine() {
 
 // ---------- WebRTC ----------
 function wireConnectionState(pc) {
+  pc.onsignalingstatechange = () => {
+    log(`Signaling: ${pc.signalingState}`);
+    dbgP2P('RTC signalingState', pc.signalingState);
+  };
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
     log(`Connection: ${s}`);
     console.info('[SouthStack P2P] WebRTC connectionState:', s);
+    dbgP2P('RTC connectionState', s);
     if (s === 'failed') {
       log('WebRTC connection failed — same Wi‑Fi? Try ?offline=1 on BOTH devices, or check firewall.');
+      try {
+        if (typeof pc.restartIce === 'function') {
+          pc.restartIce();
+          log('Attempting ICE restart after connection failure…');
+        }
+      } catch {
+        /* ignore */
+      }
       setRoomStatus(
         '<strong>WebRTC could not connect.</strong> Use the <strong>same Wi‑Fi</strong> as the host (not mobile data). Add <code>?offline=1</code> to the URL on <strong>both</strong> host and guest. Keep <code>serve_with_signal.py</code> running; then refresh and join again.'
       );
@@ -1431,15 +2431,27 @@ function wireConnectionState(pc) {
   pc.oniceconnectionstatechange = () => {
     const ice = pc.iceConnectionState;
     log(`ICE: ${ice}`);
+    dbgP2P('RTC iceConnectionState', ice);
     if (ice === 'failed') {
       log('ICE failed — incomplete network path between devices.');
+      try {
+        if (typeof pc.restartIce === 'function') {
+          pc.restartIce();
+          log('Attempting ICE restart after ICE failure…');
+        }
+      } catch {
+        /* ignore */
+      }
     }
   };
 }
 
-function onTransportGone(peerId) {
+function onTransportGone(peerId, reason = 'unknown') {
   if (!peerId || !channelsByPeer.has(peerId)) return;
-  log(`A device left (${peerId.slice(0, 8)}…).`);
+  log(`A device left (${peerId.slice(0, 8)}…). Reason: ${reason}.`);
+  if (reason === 'stale_heartbeat' || reason === 'ping_send_failed') {
+    metricsState.transportDrops = (metricsState.transportDrops || 0) + 1;
+  }
   const gone = peerId;
   channelsByPeer.delete(peerId);
   const pc = peerConnectionsByPeer.get(peerId);
@@ -1451,7 +2463,23 @@ function onTransportGone(peerId) {
   peerConnectionsByPeer.delete(peerId);
   P2PAgents.knownPeerIds.delete(peerId);
   peerWebGpuByPeer.delete(peerId);
-  P2PAgents.knownPeerIds.add(localPeerId);
+  authenticatedPeers.delete(peerId);
+  pendingTransportPings.delete(peerId);
+  for (const [messageId, pending] of pendingTaskAcks.entries()) {
+    if (pending.assignee === peerId) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pendingTaskAcks.delete(messageId);
+    }
+  }
+  if (channelsByPeer.size === 0) {
+    P2PAgents.knownPeerIds = new Set([localPeerId]);
+    peerWebGpuByPeer.clear();
+    peerWebGpuByPeer.set(localPeerId, localWebGpuLikely);
+    authenticatedPeers.clear();
+    authenticatedPeers.set(localPeerId, true);
+  } else {
+    P2PAgents.knownPeerIds.add(localPeerId);
+  }
   applyLeader();
   const r = sharedState.llmChat.runPeerId;
   const noPeersLeft = channelsByPeer.size === 0;
@@ -1479,15 +2507,21 @@ function onTransportGone(peerId) {
   })();
   updatePeers();
   if (channelsByPeer.size === 0 && P2PAgents.roomId) {
+    stopCandidatePolling('pending-host');
+    stopCandidatePolling('pending-join');
     setRoomStatus(
       `<strong>Not linked to another device.</strong> If the other machine closed or slept, this tab is alone — WebRTC needs both sides online (like a live call). When it returns, use the same room code and <strong>Join room</strong> / host <strong>New guest</strong>. Chat history stays in this browser (IndexedDB) until you clear site data.`
     );
     updateStatus('No peer link — reconnect to continue together.', 'disconnected');
+    scheduleAutoReconnect('peer disconnected');
   }
 }
 
 async function createRoom() {
   P2PAgents.roomId = Math.random().toString(36).slice(2, 10);
+  sessionAuthToken = newSessionAuthToken();
+  authenticatedPeers.clear();
+  authenticatedPeers.set(localPeerId, true);
   ensureSignalBus(P2PAgents.roomId);
   const rid = document.getElementById('roomId');
   if (rid) rid.value = P2PAgents.roomId;
@@ -1505,6 +2539,7 @@ async function createRoom() {
   await generateNextOffer();
   applyLeader();
   startSyncTimer();
+  persistSessionSnapshot();
   log('Room ready. For each new guest, use “Copy text for guest”, then “Apply guest reply”, then “New guest” if needed.');
 }
 
@@ -1527,8 +2562,16 @@ async function generateNextOffer() {
 
   const pc = new RTCPeerConnection({ iceServers: rtcIceServers() });
   pendingLeaderConnection = pc;
-  localConnection = pc;
+  // Do not assign localConnection here: host keeps one RTCPeerConnection per linked guest in
+  // peerConnectionsByPeer; localConnection is for the joiner role only.
   wireConnectionState(pc);
+  pc.onicecandidate = e => {
+    if (!e?.candidate || !P2PAgents.roomId) return;
+    const cand = e.candidate.toJSON ? e.candidate.toJSON() : e.candidate;
+    postSignal('candidate', '', cand);
+    void apiPostCandidate(P2PAgents.roomId, cand, '');
+  };
+  startCandidatePolling('pending-host', P2PAgents.roomId, pc);
 
   const dc = pc.createDataChannel('agents', { ordered: true });
   setupDataChannel(dc, 'pending-remote', pc);
@@ -1599,6 +2642,11 @@ async function joinRoom(opts = {}) {
   try {
     const ridEl = document.getElementById('roomId');
     const roomId = ridEl && typeof ridEl.value === 'string' ? ridEl.value.trim() : '';
+    if (!sessionAuthToken) {
+      const params = getInviteSearchParams();
+      const tok = (params.get('auth') || '').trim();
+      if (tok) sessionAuthToken = tok;
+    }
     if (!roomId) {
       setRoomStatus('Enter a room code first, then tap Join room.');
       return;
@@ -1644,6 +2692,13 @@ async function joinRoom(opts = {}) {
 
     localConnection = new RTCPeerConnection({ iceServers: rtcIceServers() });
     wireConnectionState(localConnection);
+    localConnection.onicecandidate = e => {
+      if (!e?.candidate || !P2PAgents.roomId) return;
+      const cand = e.candidate.toJSON ? e.candidate.toJSON() : e.candidate;
+      postSignal('candidate', '', cand);
+      void apiPostCandidate(P2PAgents.roomId, cand, '');
+    };
+    startCandidatePolling('pending-join', roomId, localConnection);
 
     localConnection.ondatachannel = e => {
       setupDataChannel(e.channel, 'pending-remote', localConnection);
@@ -1695,6 +2750,8 @@ async function joinRoom(opts = {}) {
 
     startSyncTimer();
     scheduleGuestLinkWatchdog();
+    persistSessionSnapshot();
+    cancelAutoReconnect();
   } finally {
     joinRoomInProgress = false;
   }
@@ -1721,7 +2778,10 @@ async function completeHandshakeAnswer(answerSdp) {
     targetSignalingState: targetPc.signalingState,
     targetConnectionState: targetPc.connectionState
   });
-  if (pendingLeaderConnection === targetPc) pendingLeaderConnection = null;
+  if (pendingLeaderConnection === targetPc) {
+    pendingLeaderConnection = null;
+    stopCandidatePolling('pending-host');
+  }
   setRoomStatus(`Guest reply applied for room <strong>${P2PAgents.roomId || 'unknown'}</strong>. Finishing connection…`);
   log('Guest reply applied.');
 }
@@ -1743,18 +2803,32 @@ function setupDataChannel(dc, remoteKey, pc = null) {
       readyState: dc.readyState
     });
     clearP2PLinkWatchdog();
+    cancelAutoReconnect();
+    reconnectAttempt = 0;
     log('Devices are now linked.');
     updateStatus('Connected. Devices can share work.', 'connected');
     setRoomStatus(`Connected in room <strong>${P2PAgents.roomId || 'unknown'}</strong> — ${P2PAgents.knownPeerIds.size} device(s).`);
     sendHello(dc);
+    stopCandidatePolling('pending-join');
     startSyncTimer();
+    persistSessionSnapshot();
   };
   dc.onmessage = async e => {
-    let msg;
+    let raw;
     try {
-      msg = JSON.parse(e.data);
+      raw = JSON.parse(e.data);
     } catch {
       return;
+    }
+    const msg = normalizeIncomingMessage(raw);
+    if (!msg || !msg.type) {
+      dbgP2P('RECV malformed', raw);
+      return;
+    }
+    dbgP2P('RECV <-', msg.type, { id: msg.id || null, from: msg.from || null });
+    // Generic ACK for all envelope messages with ids (except ACK itself).
+    if (msg.id && msg.type !== 'ack') {
+      sendOnChannel(dc, { type: 'ack', ackedId: msg.id }, msg.from || dc._remotePeerId || null);
     }
     await handleMessage(msg, dc);
   };
@@ -1764,7 +2838,17 @@ function setupDataChannel(dc, remoteKey, pc = null) {
       readyState: dc.readyState
     });
     log('Link to another device closed.');
-    onTransportGone(dc._remotePeerId);
+    if (dc._remotePeerId) {
+      onTransportGone(dc._remotePeerId, 'channel_close');
+    } else if (pendingLeaderConnection && dc._pc === pendingLeaderConnection) {
+      try {
+        pendingLeaderConnection.close();
+      } catch {
+        /* ignore */
+      }
+      pendingLeaderConnection = null;
+      log('Pending guest link closed before devices exchanged IDs.');
+    }
   };
 
   if (remoteKey && remoteKey !== 'pending-remote') {
@@ -1777,12 +2861,43 @@ function setupDataChannel(dc, remoteKey, pc = null) {
 
 // ---------- Message handling ----------
 async function handleMessage(msg, dc) {
+  if (!msg || !msg.type) return;
+  const remotePeerId = dc?._remotePeerId || msg?.peerId || msg?.fromPeerId || null;
+  if (remotePeerId) touchPeerStat(remotePeerId);
+  const isHandshakeMsg = msg?.type === 'hello' || msg?.type === 'hello_ack';
+  if (!isHandshakeMsg && remotePeerId && sessionAuthToken) {
+    if (!authenticatedPeers.get(remotePeerId)) {
+      log(`Rejected unauthenticated message from ${String(remotePeerId).slice(0, 8)}…`);
+      return;
+    }
+  }
+  const fromLeaderOnly = new Set(['subtask', 'state', 'request_continue']);
+  if (remotePeerId && fromLeaderOnly.has(msg?.type)) {
+    if (P2PAgents.leaderId && remotePeerId !== P2PAgents.leaderId) {
+      log(`Rejected unauthorized ${msg.type} from ${String(remotePeerId).slice(0, 8)}…`);
+      return;
+    }
+  }
   switch (msg.type) {
+    case 'ack':
+      dbgP2P('ACK <-', msg.ackedId || null, { from: remotePeerId || msg.from || null });
+      break;
     case 'hello': {
       clearP2PLinkWatchdog();
       const pid = msg.peerId;
       if (!pid) break;
+      const token = String(msg.authToken || '').trim();
+      if (sessionAuthToken && token && token !== sessionAuthToken) {
+        log(`Rejected peer ${pid.slice(0, 8)}… due to auth token mismatch.`);
+        break;
+      }
+      if (sessionAuthToken && !token) {
+        log(`Rejected peer ${pid.slice(0, 8)}… without auth token.`);
+        break;
+      }
+      authenticatedPeers.set(pid, true);
       peerWebGpuByPeer.set(pid, msg.webgpu === true);
+      touchPeerStat(pid, { webgpu: msg.webgpu === true });
       (msg.knownPeerIds || []).forEach(id => P2PAgents.knownPeerIds.add(id));
       P2PAgents.knownPeerIds.add(pid);
       dc._remotePeerId = pid;
@@ -1795,7 +2910,8 @@ async function handleMessage(msg, dc) {
         type: 'hello_ack',
         peerId: localPeerId,
         knownPeerIds: Array.from(P2PAgents.knownPeerIds),
-        webgpu: localWebGpuLikely
+        webgpu: localWebGpuLikely,
+        authToken: sessionAuthToken || ''
       });
       updatePeers();
       if (P2PAgents.isLeader) {
@@ -1809,13 +2925,43 @@ async function handleMessage(msg, dc) {
     }
     case 'hello_ack': {
       clearP2PLinkWatchdog();
+      const token = String(msg.authToken || '').trim();
+      if (sessionAuthToken && token && token !== sessionAuthToken) {
+        log('Rejected hello_ack due to auth token mismatch.');
+        break;
+      }
+      if (msg.peerId) authenticatedPeers.set(msg.peerId, true);
       (msg.knownPeerIds || []).forEach(id => P2PAgents.knownPeerIds.add(id));
       if (msg.peerId) {
         P2PAgents.knownPeerIds.add(msg.peerId);
-        if (msg.webgpu === true || msg.webgpu === false) peerWebGpuByPeer.set(msg.peerId, msg.webgpu);
+        if (msg.webgpu === true || msg.webgpu === false) {
+          peerWebGpuByPeer.set(msg.peerId, msg.webgpu);
+          touchPeerStat(msg.peerId, { webgpu: msg.webgpu === true });
+        }
       }
       applyLeader();
       updatePeers();
+      break;
+    }
+    case 'transport_ping': {
+      if (!remotePeerId || dc?.readyState !== 'open') break;
+      sendOnChannel(dc, {
+        type: 'transport_pong',
+        fromPeerId: localPeerId,
+        echoSentAt: Number(msg.sentAt) || Date.now()
+      }, remotePeerId);
+      break;
+    }
+    case 'transport_pong': {
+      if (!remotePeerId) break;
+      const sentAt = pendingTransportPings.get(remotePeerId);
+      pendingTransportPings.delete(remotePeerId);
+      if (!sentAt) break;
+      const rtt = Math.max(1, Date.now() - sentAt);
+      const stat = peerStats.get(remotePeerId) || { rttMs: TASK_ACK_TIMEOUT_MS };
+      touchPeerStat(remotePeerId, {
+        rttMs: Math.round((Number(stat.rttMs || TASK_ACK_TIMEOUT_MS) * 0.7) + (rtt * 0.3))
+      });
       break;
     }
     case 'state':
@@ -1838,18 +2984,79 @@ async function handleMessage(msg, dc) {
         sharedState.generation.lastChunkAt = Date.now();
         setOutput(out);
       }
-      bumpVersion();
       await saveCheckpoint();
       break;
     }
     case 'subtask': {
       // Leader never receives their own delegated messages (only workers run incoming subtasks)
       if (P2PAgents.isLeader) break;
+      const fromPeerId = dc?._remotePeerId || msg.fromPeerId || null;
+      if (msg.messageId && fromPeerId && dc?.readyState === 'open') {
+        sendOnChannel(dc, {
+          type: 'subtask_ack',
+          messageId: msg.messageId,
+          subtaskId: msg.subtaskId,
+          fromPeerId: localPeerId,
+          at: Date.now()
+        }, fromPeerId);
+      }
+      const stableExecId = `${msg.taskId || sharedState.taskId || 'na'}:${msg.subtaskId}`;
+      if (executedTasks.has(stableExecId)) {
+        const cached = completedSubtaskCache.get(msg.subtaskId) || '';
+        if (fromPeerId && dc?.readyState === 'open') {
+          sendOnChannel(dc, {
+            type: 'subtask_result',
+            taskId: msg.taskId || 'na',
+            subtaskId: msg.subtaskId,
+            result: cached,
+            fromPeerId: localPeerId
+          }, fromPeerId);
+        }
+        break;
+      }
+      if (msg.messageId && seenTaskMessageIds.has(msg.messageId)) {
+        const cached = completedSubtaskCache.get(msg.subtaskId);
+        if (cached && fromPeerId && dc?.readyState === 'open') {
+          sendOnChannel(dc, {
+            type: 'subtask_result',
+            taskId: msg.taskId || 'na',
+            subtaskId: msg.subtaskId,
+            result: cached,
+            fromPeerId: localPeerId
+          }, fromPeerId);
+        }
+        break;
+      }
+      if (msg.messageId) seenTaskMessageIds.add(msg.messageId);
+      executedTasks.add(stableExecId);
       await runSubtaskRemote(msg);
+      break;
+    }
+    case 'subtask_ack': {
+      if (!P2PAgents.isLeader) break;
+      const id = msg.messageId;
+      const pending = id ? pendingTaskAcks.get(id) : null;
+      if (!pending) break;
+      pending.acked = true;
+      if (pending.timer) clearTimeout(pending.timer);
+      pendingTaskAcks.delete(id);
+      const peerId = msg.fromPeerId || null;
+      if (peerId) {
+        const stat = peerStats.get(peerId) || { rttMs: TASK_ACK_TIMEOUT_MS, inflight: 0, done: 0, fail: 0 };
+        const rtt = Date.now() - (pending.startedAt || Date.now());
+        touchPeerStat(peerId, {
+          rttMs: Math.round((stat.rttMs * 0.7) + (Math.max(1, rtt) * 0.3))
+        });
+      }
       break;
     }
     case 'subtask_result':
       if (P2PAgents.isLeader && msg.subtaskId != null) {
+        if (msg.fromPeerId) {
+          touchPeerStat(msg.fromPeerId, {
+            done: (peerStats.get(msg.fromPeerId)?.done || 0) + 1
+          });
+        }
         applySubtaskResult(msg.subtaskId, msg.result);
       }
       break;
@@ -1898,6 +3105,10 @@ async function handleMessage(msg, dc) {
       await saveCheckpoint();
       break;
     }
+    case 'coordinator_elected': {
+      handleCoordinatorElection(msg);
+      break;
+    }
     default:
       break;
   }
@@ -1912,11 +3123,24 @@ function applySubtaskResult(subtaskId, result) {
   if (st) {
     st.status = 'done';
     st.result = result;
+    if (st.assignedTo) {
+      ensurePeerMetric(st.assignedTo);
+      metricsState.peerUtilization[st.assignedTo].completed += 1;
+    }
+    if (!String(result || '').trim()) {
+      noteQuality(`Subtask ${subtaskId} produced empty output.`);
+    } else if (String(result).length < 40) {
+      noteQuality(`Subtask ${subtaskId} produced short output (${String(result).length} chars).`);
+    }
   }
   P2PAgents.results.push(result || '');
   bumpVersion();
   broadcastState();
-  appendOutput(`\n\n--- subtask ${subtaskId} ---\n\n${result || ''}`);
+  appendOutput(`
+
+--- subtask ${subtaskId} ---
+
+${result || ''}`);
   finalizeIfAllSubtasksDone();
   notifySubtaskDone(subtaskId);
 }
@@ -1929,6 +3153,18 @@ function finalizeIfAllSubtasksDone() {
   sharedState.status = 'done';
   sharedState.generation.phase = 'idle';
   sharedState.generation.streaming = false;
+  if (metricsState.failures === 0) {
+    noteQuality('All subtasks completed without transport failure.');
+  } else {
+    noteQuality(`Completed with ${metricsState.failures} transport-level failure(s) handled by retry/fallback.`);
+  }
+  finalizeMetricsAndPersist();
+  const utilSummary = Object.entries(metricsState.peerUtilization || {})
+    .map(([pid, m]) => `${String(pid).slice(0, 8)}… a:${m.assigned || 0} c:${m.completed || 0} f:${m.failed || 0}`)
+    .join(' | ');
+  if (utilSummary) {
+    log(`Peer utilization: ${utilSummary}`);
+  }
   bumpVersion();
   broadcastState();
   log('All parts of the job are finished.');
@@ -1936,7 +3172,7 @@ function finalizeIfAllSubtasksDone() {
 
 function reassignOrphanSubtasks() {
   for (const st of sharedState.subtasks) {
-    if (st.status === 'running' && st.assignedTo && !P2PAgents.knownPeerIds.has(st.assignedTo)) {
+    if (st.status === 'running' && st.assignedTo && !isPeerReachableForWork(st.assignedTo)) {
       st.status = 'pending';
       st.assignedTo = null;
     }
@@ -1944,7 +3180,7 @@ function reassignOrphanSubtasks() {
   if (P2PAgents.isLeader) {
     for (const st of sharedState.subtasks) {
       if (st.status === 'pending') {
-        st.assignedTo = localPeerId;
+        st.assignedTo = chooseAssigneeForSubtask();
         st.status = 'running';
       }
     }
@@ -1960,8 +3196,20 @@ async function flushPendingSubtasksAfterFailover() {
   await initEngine();
   for (const st of sharedState.subtasks) {
     if (st.status === 'done') continue;
-    if (st.assignedTo !== localPeerId) continue;
-    await runSubtaskRemote({ subtaskId: st.id, payload: st.text });
+    if (!st.assignedTo || !isPeerReachableForWork(st.assignedTo)) {
+      st.assignedTo = chooseAssigneeForSubtask();
+    }
+    if (st.assignedTo === localPeerId) {
+      await runSubtaskRemote({ taskId: sharedState.taskId || 'na', subtaskId: st.id, payload: st.text });
+      continue;
+    }
+    const ok = await sendSubtaskWithRetry(st, st.assignedTo);
+    if (!ok) {
+      st.assignedTo = localPeerId;
+      await runSubtaskRemote({ taskId: sharedState.taskId || 'na', subtaskId: st.id, payload: st.text });
+      continue;
+    }
+    await waitForSubtaskDone(st.id, 360000);
   }
 }
 
@@ -1983,23 +3231,69 @@ function parseSubtasksFromPlanText(planText) {
   }
 }
 
+function isDebugWorkflowPrompt(task) {
+  const t = String(task || '').toLowerCase();
+  return /\b(debug|bug|failing test|stack trace|exception|race condition|regression)\b/.test(t);
+}
+
+function buildDebugSubtasks(task) {
+  const base = String(task || '').trim();
+  return [
+    {
+      id: 0,
+      text: `[analyzer] Debug stage 1/4: Reproduce and localize the issue from this report. Return likely files/functions and a minimal reproduction.\n\n${base}`,
+      assignedTo: null,
+      status: 'pending'
+    },
+    {
+      id: 1,
+      text: `[analyzer] Debug stage 2/4: Perform root-cause analysis. Return concise reasoning, probable fault path, and confidence score.\n\n${base}`,
+      assignedTo: null,
+      status: 'pending'
+    },
+    {
+      id: 2,
+      text: `[fixer] Debug stage 3/4: Propose a patch. Return code-only fix with minimal side effects.\n\n${base}`,
+      assignedTo: null,
+      status: 'pending'
+    },
+    {
+      id: 3,
+      text: `[fixer] Debug stage 4/4: Design regression checks for the proposed fix. Return test cases and pass/fail criteria.\n\n${base}`,
+      assignedTo: null,
+      status: 'pending'
+    }
+  ];
+}
+
 async function delegateSubtasksFromState() {
-  const remoteIds = Array.from(P2PAgents.knownPeerIds).filter(id => id !== localPeerId);
-  let idx = 0;
+  const jobs = [];
+  metricsState.subtaskCount = sharedState.subtasks.length;
   for (const st of sharedState.subtasks) {
-    const assignee = remoteIds.length > 0 ? remoteIds[idx % remoteIds.length] : localPeerId;
+    const assignee = chooseAssigneeForSubtask();
     st.assignedTo = assignee;
     st.status = 'running';
-    idx += 1;
-    const ch = channelsByPeer.get(assignee);
-    if (assignee !== localPeerId && ch && ch.readyState === 'open') {
-      ch.send(JSON.stringify({ type: 'subtask', subtaskId: st.id, payload: st.text }));
-      await waitForSubtaskDone(st.id, 360000);
-    } else {
-      await runSubtaskRemote({ subtaskId: st.id, payload: st.text });
+    ensurePeerMetric(assignee);
+    metricsState.peerUtilization[assignee].assigned += assignee === localPeerId ? 1 : 0;
+    if (assignee === localPeerId) {
+      jobs.push(runSubtaskRemote({ taskId: sharedState.taskId || 'na', subtaskId: st.id, payload: st.text }));
+      continue;
     }
+    jobs.push(
+      (async () => {
+        const ok = await sendSubtaskWithRetry(st, assignee);
+        if (ok) {
+          await waitForSubtaskDone(st.id, 360000);
+          return;
+        }
+        log(`Subtask ${st.id} fallback to local execution after retries.`);
+        st.assignedTo = localPeerId;
+        await runSubtaskRemote({ taskId: sharedState.taskId || 'na', subtaskId: st.id, payload: st.text });
+      })()
+    );
   }
-  log('Subtasks run one after another on the remote peer so the shared transcript stays readable.');
+  await Promise.all(jobs);
+  log('Subtasks finished with load-aware parallel scheduling.');
 }
 
 async function continueGenerationAfterFailover() {
@@ -2019,8 +3313,16 @@ async function continueGenerationAfterFailover() {
   const wasPlan = g.phase === 'plan_stream' || sharedState.status === 'planning';
   const planCtx = sharedState.planPrompt || base;
   const continuation = wasPlan
-    ? `${planCtx}\n\nContinue from the last character only. Output ONLY valid JSON array text.\n\n${partial}`
-    : `${base}\n\n(Continue from previous assistant output exactly where it left off.)\n\n${partial}`;
+    ? `${planCtx}
+
+Continue from the last character only. Output ONLY valid JSON array text.
+
+${partial}`
+    : `${base}
+
+(Continue from previous assistant output exactly where it left off.)
+
+${partial}`;
 
   g.phase = wasPlan ? 'plan_stream' : 'main_stream';
   g.streaming = true;
@@ -2082,16 +3384,27 @@ async function runSubtaskRemote(msg) {
   await initEngine();
   const subId = msg.subtaskId;
   const task = msg.payload;
+  const taskType = msg.taskType || inferTaskType(task);
   const g = sharedState.generation;
   g.phase = `subtask_${subId}`;
   g.streaming = true;
   let acc = '';
 
+  let userPrompt = `Complete this coding subtask.\n\n${task}`;
+  if (taskType === 'analyze') {
+    userPrompt =
+      `You are an analyzer agent. Return STRICT JSON only with this shape:\n` +
+      `{"summary":"...","likely_files":["..."],"root_cause":"...","confidence":0.0,"repro_steps":["..."]}\n\n` +
+      `${task}`;
+  } else if (taskType === 'fix') {
+    userPrompt = `You are a fixer agent. Return ONLY code (no markdown, no explanation).\n\n${task}`;
+  }
+
   const stream = await engine.chat.completions.create({
     messages: [
       {
         role: 'user',
-        content: `Complete this coding subtask. Return ONLY code.\n\n${task}`
+        content: userPrompt
       }
     ],
     max_tokens: 1024,
@@ -2118,10 +3431,13 @@ async function runSubtaskRemote(msg) {
   }
 
   g.streaming = false;
+  completedSubtaskCache.set(subId, acc);
   broadcast({
     type: 'subtask_result',
+    taskId: msg.taskId || sharedState.taskId || 'na',
     subtaskId: subId,
-    result: acc
+    result: acc,
+    fromPeerId: localPeerId
   });
   if (P2PAgents.isLeader) {
     applySubtaskResult(subId, acc);
@@ -2144,6 +3460,7 @@ async function assignTask() {
   await initEngine();
 
   sharedState.taskId = `t_${Date.now()}`;
+  resetMetrics(sharedState.taskId);
   sharedState.originalPrompt = task;
   sharedState.status = 'planning';
   sharedState.subtasks = [];
@@ -2160,6 +3477,34 @@ async function assignTask() {
   broadcastState();
 
   try {
+    if (task.length > LOCAL_CONTEXT_MAX_CHARS) {
+      sharedState.subtasks = buildContextRoutedSubtasks(task);
+      sharedState.status = 'running';
+      sharedState.generation.phase = 'delegating';
+      sharedState.generation.streaming = false;
+      sharedState.generation.partialOutput = `[large-context mode: ${sharedState.subtasks.length} shards routed across peers]`;
+      bumpVersion();
+      broadcastState();
+      log(
+        `Large context detected (${task.length} chars). Applied chunking and distributed shard routing across peers.`
+      );
+      await delegateSubtasksFromState();
+      return;
+    }
+
+    if (isDebugWorkflowPrompt(task)) {
+      sharedState.subtasks = buildDebugSubtasks(task);
+      sharedState.status = 'running';
+      sharedState.generation.phase = 'delegating';
+      sharedState.generation.streaming = false;
+      sharedState.generation.partialOutput = '[debug pipeline: reproduce, analyze, patch, verify]';
+      bumpVersion();
+      broadcastState();
+      log('Debug workflow detected. Running distributed reproduce/analyze/patch/verify pipeline.');
+      await delegateSubtasksFromState();
+      return;
+    }
+
     const planStream = await engine.chat.completions.create({
       messages: [{ role: 'user', content: planPrompt }],
       max_tokens: 512,
@@ -2195,6 +3540,9 @@ async function assignTask() {
   } catch (e) {
     log(`Job could not start: ${e.message}`);
     sharedState.status = 'error';
+    metricsState.failures += 1;
+    noteQuality(`Task failed to start: ${e.message}`);
+    finalizeMetricsAndPersist();
     broadcastState();
   }
 }
@@ -2210,6 +3558,17 @@ function downloadCode() {
   const a = document.createElement('a');
   a.href = url;
   a.download = `southstack-p2p-${P2PAgents.roomId || 'out'}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function downloadLatestMetrics() {
+  const latest = getLatestMetrics() || metricsState;
+  const blob = new Blob([JSON.stringify(latest, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `southstack-p2p-metrics-${latest.taskId || 'latest'}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -2264,10 +3623,12 @@ function applyInviteLink() {
   try {
     const parsed = new URL(raw);
     const room = parsed.searchParams.get('room') || '';
+    const auth = (parsed.searchParams.get('auth') || '').trim();
     if (!room) {
       setRoomStatus('That link has no room code in it.');
       return;
     }
+    if (auth) sessionAuthToken = auth;
     const rid = document.getElementById('roomId');
     if (rid) rid.value = room;
     updateJoinLinkField(room);
@@ -2455,6 +3816,57 @@ function stopAskCodingLLM() {
   updateAskUiLocks();
 }
 
+function testSendMessage() {
+  const [peerId, dc] = Array.from(channelsByPeer.entries())[0] || [];
+  if (!dc) {
+    log('testSendMessage: no connected peer.');
+    return;
+  }
+  sendOnChannel(
+    dc,
+    {
+      type: 'transport_ping',
+      fromPeerId: localPeerId,
+      sentAt: Date.now(),
+      probe: true
+    },
+    peerId
+  );
+  log(`testSendMessage: ping sent to ${String(peerId).slice(0, 8)}…`);
+}
+
+function testBroadcast() {
+  broadcast({
+    type: 'state',
+    state: compactStateForWire(sharedState),
+    probe: true
+  });
+  log(`testBroadcast: state broadcast to ${channelsByPeer.size} peer(s).`);
+}
+
+async function testTask() {
+  if (!P2PAgents.isLeader) {
+    log('testTask: run on coordinator/host.');
+    return;
+  }
+  const fake = {
+    id: Date.now(),
+    text: '[analyzer] quick probe task: return JSON summary for this tiny task',
+    assignedTo: null,
+    status: 'pending'
+  };
+  const assignee = chooseAssigneeForSubtask();
+  fake.assignedTo = assignee;
+  fake.status = 'running';
+  if (assignee === localPeerId) {
+    await runSubtaskRemote({ taskId: sharedState.taskId || 'probe', subtaskId: fake.id, payload: fake.text });
+    log('testTask: executed locally.');
+    return;
+  }
+  const ok = await sendSubtaskWithRetry(fake, assignee);
+  log(`testTask: dispatched to ${String(assignee).slice(0, 8)}… ack=${ok}`);
+}
+
 // Expose for inline HTML onclick + manual answer paste
 window.P2PAgents = P2PAgents;
 window.createRoom = createRoom;
@@ -2462,6 +3874,7 @@ window.generateNextOffer = generateNextOffer;
 window.joinRoom = joinRoom;
 window.assignTask = assignTask;
 window.downloadCode = downloadCode;
+window.downloadLatestMetrics = downloadLatestMetrics;
 window.completeHandshakeAnswer = completeHandshakeAnswer;
 window.getLocalPeerId = () => localPeerId;
 window.copyRoomId = copyRoomId;
@@ -2478,6 +3891,40 @@ window.consoleCodingPrompt = consoleCodingPrompt;
 window.promptCoding = consoleCodingPrompt;
 window.askCodingLLM = askCodingLLM;
 window.stopAskCodingLLM = stopAskCodingLLM;
+window.testSendMessage = testSendMessage;
+window.testBroadcast = testBroadcast;
+window.testTask = testTask;
+
+/** Legacy southstack / southstack-demo: console-only prompt (user message, no coding filter). */
+window.ask = legacyConsoleAsk;
+
+window.SouthStack = {
+  version: 'unified-p2p',
+  clearRuntimeCaches: clearSouthStackRuntimeCaches,
+  checkRAM: checkRAMSouthStack,
+  checkStorageQuota: checkStorageQuotaSouthStack,
+  formatError: formatErrorLegacy,
+  getEngine: () => engine,
+  getConfig: () => ({ ...CONFIG }),
+  getSystemStatus: async () => {
+    const storage = await checkStorageQuotaSouthStack();
+    const ramGB = await checkRAMSouthStack();
+    return {
+      webGPU: !!navigator.gpu,
+      ramGB,
+      storage,
+      online: navigator.onLine,
+      modelLoaded: !!modelLoaded,
+      modelName: lastLoadedModelId,
+      roomId: P2PAgents.roomId || null,
+      isCoordinator: !!P2PAgents.isLeader,
+      linkedPeers: channelsByPeer.size
+    };
+  },
+  reset: () => {
+    window.location.reload();
+  }
+};
 
 ensureWebGPUAdapterCompat();
 
@@ -2500,6 +3947,7 @@ async function init() {
   });
   localWebGpuLikely = await detectLocalWebGpuLikely();
   peerWebGpuByPeer.set(localPeerId, localWebGpuLikely);
+  authenticatedPeers.set(localPeerId, true);
   const params = new URLSearchParams(window.location.search);
   if ('serviceWorker' in navigator && params.get('nosw') !== '1') {
     navigator.serviceWorker
@@ -2516,11 +3964,21 @@ async function init() {
   }
   applyLeader();
   updatePeers();
-  const inviteParams = getInviteSearchParams();
-  const roomFromUrl = (inviteParams.get('room') || '').trim();
-  const doInviteAuto = !!roomFromUrl && wantsUrlAutoJoin(inviteParams);
-  if (roomFromUrl) {
-    const rid = document.getElementById('roomId');
+  
+  // Trigger coordinator election when new peer joins
+  setTimeout(() => checkCoordinatorNeeded(), 500);
+  
+  if (P2PAgents.isLeader) {
+    await restoreCheckpointIfAny();
+    const inviteParams = getInviteSearchParams();
+    const roomFromUrl = (inviteParams.get('room') || '').trim();
+    const authFromUrl = (inviteParams.get('auth') || '').trim();
+    const saved = !roomFromUrl ? readSessionSnapshot() : null;
+    const roomFromSaved = saved?.roomId ? String(saved.roomId).trim() : '';
+    const doInviteAuto = !!roomFromUrl && wantsUrlAutoJoin(inviteParams);
+    if (roomFromUrl) {
+      if (authFromUrl) sessionAuthToken = authFromUrl;
+      const rid = document.getElementById('roomId');
     if (rid) rid.value = roomFromUrl;
     updateJoinLinkField(roomFromUrl);
     if (doInviteAuto) {
@@ -2530,6 +3988,21 @@ async function init() {
         await new Promise(r => setTimeout(r, 250));
         await runInviteAutoJoinFromRoomId(roomFromUrl);
       })();
+    }
+  } else if (roomFromSaved) {
+    if (saved?.authToken) sessionAuthToken = String(saved.authToken);
+    const rid = document.getElementById('roomId');
+    if (rid) rid.value = roomFromSaved;
+    P2PAgents.roomId = roomFromSaved;
+    ensureSignalBus(roomFromSaved);
+    updateJoinLinkField(roomFromSaved);
+    setRoomStatus(
+      `Recovered previous room <strong>${roomFromSaved}</strong>. Reconnecting to peers automatically…`
+    );
+    if (saved?.wasLeader) {
+      void generateNextOffer();
+    } else {
+      scheduleAutoReconnect('restored session');
     }
   } else if (params.get('easy') === '1') {
     void easyStartSessionAndShowQr();
@@ -2543,7 +4016,10 @@ async function init() {
     log('Offline/LAN mode (?offline=1): no Google STUN — use same Wi‑Fi or paste SDP between machines.');
   }
   console.info(
-    '%cSouthStack P2P%c · Local WebGPU LLM. In this console run:\n  await promptCoding("Write a factorial in JavaScript")',
+    '%cSouthStack (unified)%c · P2P + WebGPU. Console:\n' +
+      '  await ask("Hello") — legacy demo-style (user message only)\n' +
+      '  await promptCoding("…") — coding assistant (system prompt + filter)\n' +
+      '  SouthStack.getSystemStatus() — RAM/storage/model/P2P snapshot',
     'color:#00c7ff;font-weight:bold',
     'color:inherit'
   );

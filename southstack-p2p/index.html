@@ -1018,9 +1018,36 @@
                 </div>
             </div>
 
+            <div id="network-discovery-panel" class="panel" style="margin-bottom:16px;border:2px solid #2d8a4e;background:rgba(18,52,32,0.35);">
+                <h4 style="color:#7fff96;margin-bottom:8px;">🌐 Network Discovery — Auto-detect server</h4>
+                <p class="small">Automatically find the server URL for phones and other devices on your network.</p>
+                <div class="row" style="margin-top:12px;">
+                    <button type="button" onclick="discoverNetworkURLs()">🔍 Discover Network URLs</button>
+                    <button type="button" class="btn-secondary" onclick="copyAllURLs()">📋 Copy All URLs</button>
+                </div>
+                <div id="networkDiscoveryStatus" class="muted" style="margin-top:10px;"></div>
+                <div id="networkURLList" style="margin-top:12px;display:none;">
+                    <p class="small" style="color:#c9a227;"><strong>Use these URLs on other devices:</strong></p>
+                    <ul id="urlListDisplay" class="small" style="line-height:1.8;margin-left:1.2rem;"></ul>
+                    <p class="small muted">💡 Tip: On phones/tablets, use the 192.168.x.x or 10.x.x.x URL (NOT 127.0.0.1 or localhost)</p>
+                </div>
+                <details class="fold" style="margin-top:12px;">
+                    <summary>📱 How to connect phones & tablets</summary>
+                    <div class="fold-inner">
+                        <ol class="small" style="margin-left:1.2rem;line-height:1.7;">
+                            <li><strong>Step 1:</strong> Click "Discover Network URLs" above</li>
+                            <li><strong>Step 2:</strong> Find the URL that starts with 192.168.x.x or 10.x.x.x</li>
+                            <li><strong>Step 3:</strong> Type that URL in your phone's browser (same Wi-Fi required)</li>
+                            <li><strong>Step 4:</strong> Or scan the QR code after clicking "Apply to invite link & QR"</li>
+                            <li><strong>Troubleshooting:</strong> If connection fails, check firewall settings and ensure Python is allowed</li>
+                        </ol>
+                    </div>
+                </details>
+            </div>
+
             <div id="easy-connect-panel" class="panel" style="margin-bottom:16px;border:2px solid #1e6ab5;background:rgba(18,45,82,0.45);">
                 <h4 style="color:#9fd4ff;margin-bottom:8px;">Easy connect (recommended)</h4>
-                <p class="small">Run <strong><code>python3 serve_with_signal.py</code></strong> in <code>southstack-p2p</code> (or <code>./start-server.sh</code>). It serves the app and swaps WebRTC setup text automatically — no copy/paste between PCs.</p>
+                <p class="small">Run <strong><code>python3 serve_universal.py</code></strong> in <code>southstack-p2p</code> (or <code>./start-server.sh</code>). It serves the app and swaps WebRTC setup text automatically — no copy/paste between PCs.</p>
                 <div class="row" style="margin-top:12px;">
                     <button type="button" id="easyStartBtn" data-easy-start onclick="easyStartSessionAndShowQr()">Start session — show link &amp; QR</button>
                     <button type="button" class="btn-secondary" onclick="generateNextOffer()" title="After a guest connects, use this before inviting the next device">New guest — next device</button>
@@ -1130,6 +1157,7 @@
             <h3>Shared result</h3>
             <div id="output" class="log">Nothing yet — the host can send a job after everyone is connected.</div>
             <button onclick="downloadCode()">Download as text file</button>
+            <button onclick="downloadLatestMetrics()">Download latest metrics</button>
         </div>
 
         <div id="help-guide" class="section guest-hide-on-invite">
@@ -1252,6 +1280,86 @@
 
     <script src="./webgpu-early-compat.js?v=3"></script>
     <script type="module" src="./main.js?v=38"></script>
+    <script>
+    // Network Discovery Functions
+    function discoverNetworkURLs() {
+      const statusEl = document.getElementById('networkDiscoveryStatus');
+      const listEl = document.getElementById('networkURLList');
+      const urlListEl = document.getElementById('urlListDisplay');
+      
+      statusEl.innerHTML = '🔍 Scanning network...';
+      listEl.style.display = 'none';
+      
+      fetch('/api/southstack/discover')
+        .then(res => res.json())
+        .then(data => {
+          const urls = data.urls || [];
+          const mdnsUrl = data.mdns_url;
+          
+          if (urls.length === 0) {
+            statusEl.innerHTML = '⚠️ No network URLs found. Check your network connection.';
+            return;
+          }
+          
+          statusEl.innerHTML = '✅ Found ' + urls.length + ' network URL(s)!';
+          
+          let html = '';
+          urls.forEach((url, idx) => {
+            const isLocalhost = url.includes('127.0.0.1') || url.includes('localhost');
+            const icon = isLocalhost ? '💻' : '📱';
+            const style = isLocalhost ? 'color:#8696a0;' : 'color:#7fff96;font-weight:600;';
+            html += '<li style="' + style + '">' + icon + ' <code>' + url + '</code></li>';
+          });
+          
+          if (mdnsUrl) {
+            html += '<li style="color:#b7d7ff;">🔖 <code>' + mdnsUrl + '</code> (mDNS/Bonjour - works on macOS/iOS)</li>';
+          }
+          
+          urlListEl.innerHTML = html;
+          listEl.style.display = 'block';
+          
+          const nonLocalURL = urls.find(u => !u.includes('127.0.0.1') && !u.includes('localhost'));
+          if (nonLocalURL) {
+            const lanInput = document.getElementById('lanBaseUrl');
+            if (lanInput) {
+              lanInput.value = nonLocalURL;
+              statusEl.innerHTML += ' 🎯 Auto-filled LAN URL for phones!';
+            }
+          }
+        })
+        .catch(err => {
+          statusEl.innerHTML = '❌ Discovery failed: ' + err.message;
+          console.error('Network discovery error:', err);
+        });
+    }
+    
+    function copyAllURLs() {
+      fetch('/api/southstack/discover')
+        .then(res => res.json())
+        .then(data => {
+          const urls = data.urls || [];
+          const mdnsUrl = data.mdns_url;
+          
+          let text = 'SouthStack Network URLs:\n========================\n\nFor other devices on same Wi-Fi:\n';
+          urls.forEach(url => {
+            if (!url.includes('127.0.0.1') && !url.includes('localhost')) {
+              text += url + '\n';
+            }
+          });
+          
+          if (mdnsUrl) {
+            text += '\nEasy memory name (macOS/iOS):\n' + mdnsUrl + '\n';
+          }
+          
+          navigator.clipboard.writeText(text).then(() => {
+            const statusEl = document.getElementById('networkDiscoveryStatus');
+            statusEl.innerHTML = '📋 URLs copied to clipboard!';
+            setTimeout(() => discoverNetworkURLs(), 2000);
+          }).catch(err => console.error('Copy failed:', err));
+        })
+        .catch(err => console.error('Discovery failed:', err));
+    }
+    </script>
     <script>
     (function () {
       var btn = document.getElementById('waSettingsBtn');

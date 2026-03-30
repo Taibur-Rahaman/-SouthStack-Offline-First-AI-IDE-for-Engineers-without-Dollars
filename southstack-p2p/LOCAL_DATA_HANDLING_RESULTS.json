@@ -1,0 +1,22 @@
+{
+  "target_file": "southstack-p2p/main.js",
+  "external_endpoint_count": 0,
+  "local_endpoint_count": 2,
+  "endpoints": [
+    {
+      "line": 14,
+      "url": "http://127.0.0.1:7895/ingest/561479c7-4a93-41fe-85d2-dcfdecab8321",
+      "local": true,
+      "context_has_task_like_fields": false
+    },
+    {
+      "line": 85,
+      "url": "http://127.0.0.1:7895/ingest/561479c7-4a93-41fe-85d2-dcfdecab8321",
+      "local": true,
+      "context_has_task_like_fields": true
+    }
+  ],
+  "risks": [],
+  "pass": true,
+  "generated_at": "2026-03-30T16:45:28.054Z"
+}

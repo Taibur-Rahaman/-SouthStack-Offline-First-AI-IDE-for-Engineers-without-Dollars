@@ -1,0 +1,10 @@
+{
+  "pass": true,
+  "checks": [
+    "debug prompt detection",
+    "non-debug prompt detection",
+    "4-stage pipeline generation",
+    "stage ordering validation"
+  ],
+  "generated_at": "2026-03-30T16:44:29.074Z"
+}

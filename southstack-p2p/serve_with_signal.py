@@ -12,6 +12,7 @@ import json
 import os
 import socket
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -20,8 +21,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # Set in main() before serve_forever()
 _SERVER_PORT = 8000
 _BIND_HOST = "0.0.0.0"
-# room_id -> {"offer": str | None, "answer": str | None}
+# room_id -> {"offer": str | None, "answer": str | None, "candidates": list[dict]}
 ROOMS: dict[str, dict[str, str | None]] = {}
+ROOM_LOCK = threading.Lock()
 DEBUG_LOG_PATH = "/Users/eloneflax/cse327/.cursor/debug-947c6e.log"
 
 
@@ -126,8 +128,9 @@ class Handler(BaseHTTPRequestHandler):
             if not room:
                 dbg_log("pre-fix-v3", "S2", "serve_with_signal.py:GET:offer", "missing room on offer get", {})
                 return self._json(400, {"error": "missing room"})
-            data = ROOMS.get(room) or {}
-            sdp = data.get("offer")
+            with ROOM_LOCK:
+                data = ROOMS.get(room) or {}
+                sdp = data.get("offer")
             if not sdp:
                 dbg_log("pre-fix-v3", "S2", "serve_with_signal.py:GET:offer", "offer missing", {"room": room})
                 # Not an error: guests poll until host creates an offer.
@@ -141,19 +144,50 @@ class Handler(BaseHTTPRequestHandler):
             if not room:
                 dbg_log("pre-fix-v3", "S3", "serve_with_signal.py:GET:answer", "missing room on answer get", {})
                 return self._json(400, {"error": "missing room"})
-            data = ROOMS.get(room) or {}
-            sdp = data.get("answer")
+            with ROOM_LOCK:
+                data = ROOMS.get(room) or {}
+                sdp = data.get("answer")
+                if sdp and room in ROOMS:
+                    ROOMS[room]["answer"] = None
             if not sdp:
                 dbg_log("pre-fix-v3", "S3", "serve_with_signal.py:GET:answer", "answer missing", {"room": room})
                 # Not an error: host polls until guest posts the answer.
                 return self._empty(204)
             dbg_log("pre-fix-v3", "S3", "serve_with_signal.py:GET:answer", "answer served", {"room": room, "answerLen": len(sdp)})
             return self._json(200, {"sdp": sdp})
+        if p.path == "/api/southstack/candidate":
+            q = parse_qs(p.query)
+            room = (q.get("room") or [None])[0]
+            peer = (q.get("peer") or [None])[0]
+            room = unquote(room) if room else None
+            peer = unquote(peer) if peer else None
+            if not room or not peer:
+                return self._json(400, {"error": "missing room or peer"})
+            out: list[dict] = []
+            with ROOM_LOCK:
+                data = ROOMS.get(room) or {}
+                candidates = data.get("candidates") or []
+                keep = []
+                for item in candidates:
+                    from_peer = str(item.get("fromPeerId") or "")
+                    to_peer = str(item.get("toPeerId") or "")
+                    if from_peer == peer:
+                        keep.append(item)
+                        continue
+                    if to_peer and to_peer != peer:
+                        keep.append(item)
+                        continue
+                    out.append(item)
+                if room in ROOMS:
+                    ROOMS[room]["candidates"] = keep
+            if not out:
+                return self._empty(204)
+            return self._json(200, {"candidates": out})
         return self._static_get(p.path)
 
     def do_POST(self) -> None:
         p = urlparse(self.path)
-        if p.path not in ("/api/southstack/offer", "/api/southstack/answer"):
+        if p.path not in ("/api/southstack/offer", "/api/southstack/answer", "/api/southstack/candidate"):
             self.send_error(405)
             return
         ln = int(self.headers.get("Content-Length", "0") or "0")
@@ -164,14 +198,39 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "invalid json"})
         room = body.get("room")
         sdp = body.get("sdp")
-        if not room or not sdp:
+        if p.path != "/api/southstack/candidate" and (not room or not sdp):
             return self._json(400, {"error": "room and sdp required"})
         if p.path == "/api/southstack/offer":
-            ROOMS[room] = {"offer": sdp, "answer": None}
+            with ROOM_LOCK:
+                ROOMS[room] = {"offer": sdp, "answer": None, "candidates": []}
             dbg_log("pre-fix-v3", "S2", "serve_with_signal.py:POST:offer", "offer stored", {"room": room, "offerLen": len(sdp)})
             return self._json(200, {"ok": True})
-        ROOMS.setdefault(room, {"offer": None, "answer": None})
-        ROOMS[room]["answer"] = sdp
+        if p.path == "/api/southstack/candidate":
+            from_peer = str(body.get("fromPeerId") or "")
+            to_peer = str(body.get("toPeerId") or "")
+            cand = body.get("candidate")
+            if not room or not from_peer or not cand:
+                return self._json(400, {"error": "room, fromPeerId and candidate required"})
+            with ROOM_LOCK:
+                ROOMS.setdefault(room, {"offer": None, "answer": None, "candidates": []})
+                lst = ROOMS[room].get("candidates")
+                if not isinstance(lst, list):
+                    lst = []
+                    ROOMS[room]["candidates"] = lst
+                lst.append(
+                    {
+                        "fromPeerId": from_peer,
+                        "toPeerId": to_peer,
+                        "candidate": cand,
+                        "at": int(time.time() * 1000),
+                    }
+                )
+                if len(lst) > 300:
+                    ROOMS[room]["candidates"] = lst[-300:]
+            return self._json(200, {"ok": True})
+        with ROOM_LOCK:
+            ROOMS.setdefault(room, {"offer": None, "answer": None, "candidates": []})
+            ROOMS[room]["answer"] = sdp
         dbg_log("pre-fix-v3", "S3", "serve_with_signal.py:POST:answer", "answer stored", {"room": room, "answerLen": len(sdp)})
         return self._json(200, {"ok": True})
 

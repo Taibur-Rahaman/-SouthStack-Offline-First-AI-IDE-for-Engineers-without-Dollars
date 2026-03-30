@@ -1,0 +1,299 @@
+{
+  "pass": true,
+  "mode": "fully-real",
+  "signalReachable": true,
+  "fallbackEnabled": false,
+  "active_peers": 3,
+  "source": "synthetic",
+  "source_repo": null,
+  "total_files_processed": 10,
+  "total_lines_processed": 10020,
+  "total_issues_found": 10,
+  "total_fixes_suggested": 10,
+  "parsed_functions": 0,
+  "agents_completed": "3/3",
+  "peers": [
+    {
+      "id": "peer-1",
+      "mode": "real"
+    },
+    {
+      "id": "peer-2",
+      "mode": "real"
+    },
+    {
+      "id": "peer-3",
+      "mode": "real"
+    }
+  ],
+  "modules_processed": 10,
+  "analyzer_hits": 10,
+  "fixer_suggestions": 10,
+  "failures": {
+    "analyze": 0,
+    "fix": 0,
+    "total": 0
+  },
+  "peer3_lifecycle": [
+    {
+      "ts": 1774905660155,
+      "peer": "peer-3",
+      "event": "peer-3: task received",
+      "stage": "analyze",
+      "file": "sample_codebase_10k/module_09.js"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: analyzer done",
+      "stage": "analyze",
+      "file": "sample_codebase_10k/module_09.js",
+      "ok": true,
+      "mode": "real"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: result sent",
+      "stage": "analyze",
+      "file": "sample_codebase_10k/module_09.js"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: task received",
+      "stage": "analyze",
+      "file": "sample_codebase_10k/module_10.js"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: analyzer done",
+      "stage": "analyze",
+      "file": "sample_codebase_10k/module_10.js",
+      "ok": true,
+      "mode": "real"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: result sent",
+      "stage": "analyze",
+      "file": "sample_codebase_10k/module_10.js"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: task received",
+      "stage": "fix",
+      "file": "sample_codebase_10k/module_09.js"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: analyzer done",
+      "stage": "fix",
+      "file": "sample_codebase_10k/module_09.js",
+      "ok": true,
+      "mode": "real"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: result sent",
+      "stage": "fix",
+      "file": "sample_codebase_10k/module_09.js"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: task received",
+      "stage": "fix",
+      "file": "sample_codebase_10k/module_10.js"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: analyzer done",
+      "stage": "fix",
+      "file": "sample_codebase_10k/module_10.js",
+      "ok": true,
+      "mode": "real"
+    },
+    {
+      "ts": 1774905660156,
+      "peer": "peer-3",
+      "event": "peer-3: result sent",
+      "stage": "fix",
+      "file": "sample_codebase_10k/module_10.js"
+    }
+  ],
+  "per_peer_stats": {
+    "peer-1": {
+      "tasks": 8,
+      "time_ms": 1.49,
+      "status": "done",
+      "analyze_tasks": 4,
+      "fix_tasks": 4
+    },
+    "peer-2": {
+      "tasks": 8,
+      "time_ms": 0.93,
+      "status": "done",
+      "analyze_tasks": 4,
+      "fix_tasks": 4
+    },
+    "peer-3": {
+      "tasks": 4,
+      "time_ms": 0.41,
+      "status": "done",
+      "analyze_tasks": 2,
+      "fix_tasks": 2
+    }
+  },
+  "logs": [
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_01.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_02.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_03.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_04.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-2",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_05.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-2",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_06.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-2",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_07.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-2",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_08.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-3",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_09.js",
+      "ok": true
+    },
+    {
+      "stage": "analyze",
+      "peerId": "peer-3",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_10.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_01.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_02.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_03.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-1",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_04.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-2",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_05.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-2",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_06.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-2",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_07.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-2",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_08.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-3",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_09.js",
+      "ok": true
+    },
+    {
+      "stage": "fix",
+      "peerId": "peer-3",
+      "mode": "real",
+      "file": "sample_codebase_10k/module_10.js",
+      "ok": true
+    }
+  ],
+  "generated_at": "2026-03-30T21:21:00.157Z",
+  "estimated_time_saved_vs_single_node_pct": 60,
+  "elapsed_ms": 350.86
+}

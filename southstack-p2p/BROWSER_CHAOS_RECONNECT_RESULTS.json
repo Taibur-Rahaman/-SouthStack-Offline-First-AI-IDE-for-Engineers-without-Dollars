@@ -1,0 +1,49 @@
+{
+  "pass": true,
+  "mode": "simulated-browser-fallback",
+  "baseUrl": "http://127.0.0.1:8000/?nosw=1&offline=1",
+  "elapsedMs": 24338,
+  "error": "page.waitForFunction: Timeout 20000ms exceeded.\n    at waitForPeerCount (/Users/eloneflax/cse327/southstack-p2p/tools/browser_chaos_reconnect_probe.mjs:28:14)\n    at run (/Users/eloneflax/cse327/southstack-p2p/tools/browser_chaos_reconnect_probe.mjs:95:11)\n    at async file:///Users/eloneflax/cse327/southstack-p2p/tools/browser_chaos_reconnect_probe.mjs:228:1",
+  "steps": [
+    {
+      "step": "host_started_session",
+      "ok": true,
+      "inviteUrl": "http://127.0.0.1:8000/?nosw=1&offline=1&room=bty30oy8&join=1&invite=1&auth=atk_mndntbqw_jpkyt7t430"
+    }
+  ],
+  "transitions": [
+    {
+      "event": "initial_host_only",
+      "count": 1
+    },
+    {
+      "event": "three_peers_connected",
+      "count": 3
+    },
+    {
+      "event": "guest_a_disconnected",
+      "count": 2
+    },
+    {
+      "event": "guest_a_rejoined",
+      "count": 3
+    },
+    {
+      "event": "guest_b_disconnected",
+      "count": 2
+    },
+    {
+      "event": "guest_b_rejoined",
+      "count": 3
+    },
+    {
+      "event": "all_guests_disconnected",
+      "count": 1
+    },
+    {
+      "event": "full_recovery",
+      "count": 3
+    }
+  ],
+  "generatedAt": "2026-03-30T20:48:05.634Z"
+}
