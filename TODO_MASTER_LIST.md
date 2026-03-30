@@ -6,7 +6,7 @@
 
 ## 🔴 HIGH PRIORITY (Must Finish First)
 
-* [ ] Stable connection: 1 Host + 2 Peer devices
+* [x] Stable connection: 1 Host + 2 Peer devices
 * [ ] Multi-device debugging workflow working
 * [ ] Test with at least one large codebase
 * [ ] Demo ready with 2+ devices
@@ -15,7 +15,7 @@
 
 ## 🟡 Peer Connection
 
-* [ ] Connect 1 host with at least 2 peers
+* [x] Connect 1 host with at least 2 peers
 * [ ] Add peer discovery (local network or manual IP)
 * [ ] Handle peer disconnection
 * [ ] Auto-reconnect mechanism

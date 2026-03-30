@@ -2,6 +2,11 @@
  * SouthStack P2P — Fault-tolerant multi-agent coding
  * WebGPU LLM + WebRTC + shared state sync + checkpointing + leader election
  */
+import {
+  CONNECTION_HEALTH,
+  computeConnectionHealth,
+  computeHeartbeatSummary
+} from './connectionHealth.js';
 
 /** WebRTC expects CRLF; browsers/textareas often use LF-only when pasting. */
 function sdpToCrLf(s) {
@@ -170,6 +175,7 @@ const peerConnectionsByPeer = new Map();
 /** @type {RTCPeerConnection | null} */
 let pendingLeaderConnection = null;
 let syncTimer = null;
+let heartbeatTimer = null;
 let signalBus = null;
 let latestOfferSdp = '';
 let hostAnswerPollTimer = null;
@@ -184,6 +190,7 @@ let leaderLlmTail = Promise.resolve();
 let pendingGuestPrompt = null;
 /** Current Ask stream stop hook (leader/solo). */
 let activeSharedAskStop = null;
+const lastHeartbeatByPeer = new Map();
 
 function clearSharedAskBusyState() {
   sharedState.llmChat.busy = false;
@@ -641,6 +648,53 @@ function runPeerHelloSmokeTest() {
   }
 }
 
+function broadcastHeartbeat() {
+  broadcast({
+    type: 'peer_heartbeat',
+    fromPeerId: localPeerId,
+    at: Date.now()
+  });
+}
+
+function startHeartbeatTimer() {
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(() => {
+    if (channelsByPeer.size < 1) return;
+    broadcastHeartbeat();
+    updateConnectionHealthStatus();
+  }, CONNECTION_HEALTH.heartbeatIntervalMs);
+}
+
+function updateConnectionHealthStatus() {
+  const connectedPeerIds = Array.from(channelsByPeer.keys());
+  const summary = computeHeartbeatSummary({
+    nowMs: Date.now(),
+    localPeerId,
+    connectedPeerIds,
+    lastHeartbeatByPeer,
+    staleAfterMs: CONNECTION_HEALTH.staleHeartbeatMs
+  });
+  const health = computeConnectionHealth({
+    activePeersIncludingSelf: summary.activeCount,
+    requiredPeersIncludingSelf: CONNECTION_HEALTH.requiredPeersIncludingSelf
+  });
+  if (health.stable) {
+    updateStatus(
+      `Connected (${summary.activeCount} devices). Stable host + 2-peer quorum.`,
+      'connected'
+    );
+  } else if (channelsByPeer.size > 0) {
+    updateStatus(
+      `Connected but waiting for quorum (${summary.activeCount}/${CONNECTION_HEALTH.requiredPeersIncludingSelf} active devices).`,
+      'pending'
+    );
+  }
+  if (summary.stalePeerIds.length > 0) {
+    const staleList = summary.stalePeerIds.map(id => id.slice(0, 8)).join(', ');
+    log(`Heartbeat warning: stale peers detected (${staleList}).`);
+  }
+}
+
 function updatePeers() {
   const countEl = document.getElementById('peerCount');
   const listEl = document.getElementById('peers');
@@ -668,6 +722,7 @@ function updatePeers() {
   if (ft) {
     ft.textContent = `Saved update #${sharedState.version} · ${humanizeWorkStatus(sharedState.status)} · ${humanizePhase(sharedState.generation.phase)}`;
   }
+  updateConnectionHealthStatus();
   updateHostGuestTaskUi();
   refreshAskLlmDisplay();
 }
@@ -1023,6 +1078,7 @@ function startSyncTimer() {
     bumpVersion();
     broadcast({ type: 'state', state: structuredClone(sharedState) });
   }, CONFIG.syncIntervalMs);
+  startHeartbeatTimer();
 }
 
 function waitForIceGatheringComplete(pc, timeoutMs = CONFIG.iceGatherTimeoutMs) {
@@ -1476,6 +1532,7 @@ function onTransportGone(peerId) {
     } catch {}
   }
   peerConnectionsByPeer.delete(peerId);
+  lastHeartbeatByPeer.delete(peerId);
   P2PAgents.knownPeerIds.delete(peerId);
   peerWebGpuByPeer.delete(peerId);
   P2PAgents.knownPeerIds.add(localPeerId);
@@ -1810,6 +1867,7 @@ async function handleMessage(msg, dc) {
       const pid = msg.peerId;
       if (!pid) break;
       peerWebGpuByPeer.set(pid, msg.webgpu === true);
+      lastHeartbeatByPeer.set(pid, Date.now());
       (msg.knownPeerIds || []).forEach(id => P2PAgents.knownPeerIds.add(id));
       P2PAgents.knownPeerIds.add(pid);
       dc._remotePeerId = pid;
@@ -1840,9 +1898,18 @@ async function handleMessage(msg, dc) {
       if (msg.peerId) {
         P2PAgents.knownPeerIds.add(msg.peerId);
         if (msg.webgpu === true || msg.webgpu === false) peerWebGpuByPeer.set(msg.peerId, msg.webgpu);
+        lastHeartbeatByPeer.set(msg.peerId, Date.now());
       }
       applyLeader();
       updatePeers();
+      break;
+    }
+    case 'peer_heartbeat': {
+      const from = msg.fromPeerId || dc?._remotePeerId;
+      if (from) {
+        lastHeartbeatByPeer.set(from, Date.now());
+      }
+      updateConnectionHealthStatus();
       break;
     }
     case 'state':
@@ -2532,6 +2599,8 @@ window.promptCoding = consoleCodingPrompt;
 window.askCodingLLM = askCodingLLM;
 window.stopAskCodingLLM = stopAskCodingLLM;
 window.runPeerHelloSmokeTest = runPeerHelloSmokeTest;
+window.runThreeDeviceStabilityCheck = runThreeDeviceStabilityCheck;
+window.connectionHealthConfig = CONNECTION_HEALTH;
 
 ensureWebGPUAdapterCompat();
 
