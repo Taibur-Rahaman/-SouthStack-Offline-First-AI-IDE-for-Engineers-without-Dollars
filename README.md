@@ -10,6 +10,23 @@ Generated on: 2026-03-30 22:04:01
 
 ---
 
+## 🚀 Quick Start (One Command)
+
+```bash
+npm start
+```
+
+This starts the universal server with:
+- Automatic network discovery for all devices
+- QR code generation for mobile/tablet connections
+- mDNS support (`http://southstack-PORT.local`)
+- Cross-platform compatibility (Windows, macOS, Linux, Android, iOS)
+- Automatic coordinator election for WebGPU devices
+
+After running, open the URL shown in terminal (usually `http://localhost:8000`). For other devices on same Wi-Fi, use the LAN IP displayed (e.g., `http://192.168.x.x:8000`).
+
+---
+
 ## Submission (read this first)
 
 **Graders / quick run:** see **[`SUBMISSION_README.md`](SUBMISSION_README.md)** for the one-command distributed demo, proof JSON paths, and “why this matters.”

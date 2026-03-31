@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "scripts": {
     "test": "vitest",
-    "run-debug": "node southstack-p2p/tools/run_debug_distributed.mjs"
+    "run-debug": "node southstack-p2p/tools/run_debug_distributed.mjs",
+    "start": "cd southstack-p2p && python3 serve_universal.py"
   },
   "devDependencies": {
     "jsdom": "^29.0.1",
