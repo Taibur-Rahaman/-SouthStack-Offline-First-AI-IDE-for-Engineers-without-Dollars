@@ -319,16 +319,51 @@ let activeSharedAskStop = null;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
 let sessionAuthToken = '';
+/** Last time this peer saw a valid host heartbeat (clients only). */
+let lastHostHeartbeatAt = 0;
+/** @type {ReturnType<typeof setInterval> | null} */
+let hostHeartbeatTimer = null;
+/** @type {ReturnType<typeof setInterval> | null} */
+let clientHostWatchdogTimer = null;
+let hostFailoverCooldownUntil = 0;
+let lastLoggedRole = '';
+let lastElectedHostId = '';
+let lastHeartbeatPublicLogAt = 0;
 /** @type {Map<string, boolean>} */
 const authenticatedPeers = new Map();
 
+/** Last assistant bubble id we already spoke (avoid repeats / history on load). */
+let voiceLastSpokenMsgId = '';
+/** @type {SpeechRecognition | null} */
+let voiceRecognition = null;
+let voiceListening = false;
+/** @type {HTMLTextAreaElement | HTMLInputElement | null} */
+let voiceBoundField = null;
+let voiceFinalTranscript = '';
+/** True when the user tapped the mic to stop (so auto-send Ask only then, not on browser onend quirks). */
+let voiceUserRequestedStop = false;
+/** User is in a voice-dictation session (survives Chrome’s short recognition segments until they tap stop). */
+let voiceSessionActive = false;
+/** Bumps when a new mic session starts so stale `onend` handlers no-op. */
+let voiceTurnGeneration = 0;
+/** Prevents overlapping async mic starts (double-clicks). */
+let voiceStartInProgress = false;
+/** Last voice pipeline error for SouthStack.getVoiceSupport(). */
+let voiceLastError = '';
+
 const SESSION_KEY = 'southstack-p2p-last-session';
+const VOICE_KEY_SPEAK = 'southstack-p2p-voice-speak';
+const VOICE_KEY_AUTOSEND = 'southstack-p2p-voice-autosend';
 const TASK_RETRY_MAX = 3;
 const TASK_ACK_TIMEOUT_MS = 3500;
 const RECONNECT_BACKOFF_MS = [1500, 3000, 5000, 8000, 13000];
 const RECONNECT_MAX_ATTEMPTS = 20;
 const TRANSPORT_HEARTBEAT_MS = 4000;
 const TRANSPORT_STALE_MS = 16000;
+/** Host coordination: application-level liveness (separate from transport ping). */
+const HOST_HEARTBEAT_INTERVAL_MS = 2000;
+const HOST_HEARTBEAT_MISS_MS = 5000;
+const HOST_FAILOVER_COOLDOWN_MS = 4000;
 const LOCAL_CONTEXT_MAX_CHARS = 18000;
 const METRICS_DB_KEY = 'southstack-p2p-metrics-latest';
 
@@ -540,6 +575,8 @@ const P2PAgents = {
   roomId: null,
   isLeader: false,
   leaderId: null,
+  /** Coordinator role: host = elected leader (lowest peerId), client = everyone else. */
+  role: /** @type {'host' | 'client'} */ ('host'),
   /** @type {Set<string>} */
   knownPeerIds: new Set([localPeerId]),
   taskQueue: [],
@@ -725,30 +762,9 @@ function updateCoordinatorUI() {
   updatePeers();
 }
 
-/** Check if we need to trigger coordinator election */
+/** Align coordinator banner / host state with deterministic host election (lowest peerId). */
 function checkCoordinatorNeeded() {
-  // No coordinator currently
-  if (!currentCoordinator) {
-    log('🔍 No coordinator - triggering election');
-    electNewCoordinator();
-    return;
-  }
-  
-  // Current coordinator disconnected
-  if (!channelsByPeer.has(currentCoordinator) && currentCoordinator !== localPeerId) {
-    log('⚠️ Coordinator disconnected! Triggering failover election...');
-    currentCoordinator = null;
-    setTimeout(() => electNewCoordinator(), 500);
-    return;
-  }
-  
-  // Coordinator exists but may not have WebGPU (shouldn't happen, but safety check)
-  const coordStats = peerStats.get(currentCoordinator);
-  if (coordStats && !coordStats.webgpu && currentCoordinator !== localPeerId) {
-    log('⚠️ Coordinator lost WebGPU capability - re-electing...');
-    currentCoordinator = null;
-    setTimeout(() => electNewCoordinator(), 500);
-  }
+  applyLeader();
 }
 
 /** Enhanced peer connection handler that triggers coordinator election */
@@ -952,6 +968,7 @@ function getInviteSearchParams() {
 function wantsUrlAutoJoin(p) {
   if (!p || typeof p.get !== 'function') return false;
   if (p.get('nojoin') === '1') return false;
+  const room = (p.get('room') || '').trim();
   const j = p.get('join');
   if (j != null && j !== '') {
     const lower = String(j).toLowerCase();
@@ -959,7 +976,9 @@ function wantsUrlAutoJoin(p) {
     if (lower === '1' || lower === 'true' || lower === 'yes' || lower === 'on') return true;
     return false;
   }
-  return p.get('invite') === '1' || p.get('autojoin') === '1';
+  if (p.get('invite') === '1' || p.get('autojoin') === '1') return true;
+  // index.html?room=abc123 — same room id is enough to auto-connect when signaling is available
+  return !!room;
 }
 
 async function runInviteAutoJoinFromRoomId(roomId) {
@@ -1184,6 +1203,438 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+function voicePrefs() {
+  try {
+    return {
+      speak: localStorage.getItem(VOICE_KEY_SPEAK) !== '0',
+      autoSendAsk: localStorage.getItem(VOICE_KEY_AUTOSEND) !== '0'
+    };
+  } catch {
+    return { speak: true, autoSendAsk: true };
+  }
+}
+
+function voiceSetSpeak(on) {
+  try {
+    if (on) localStorage.removeItem(VOICE_KEY_SPEAK);
+    else localStorage.setItem(VOICE_KEY_SPEAK, '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+function voiceSetAutoSendAsk(on) {
+  try {
+    if (on) localStorage.removeItem(VOICE_KEY_AUTOSEND);
+    else localStorage.setItem(VOICE_KEY_AUTOSEND, '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+function stripForSpeech(s) {
+  return String(s || '')
+    .replace(/```[\s\S]*?```/g, ' code block. ')
+    .replace(/`[^`]+`/g, ' ')
+    .replace(/\[[^\]]+\]\([^)]+\)/g, ' ')
+    .replace(/#+\s*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 8000);
+}
+
+function stopSpeaking() {
+  try {
+    if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Mark existing assistant messages as already “heard” so we do not speak history on load. */
+function voiceSyncBaselineFromChat() {
+  const items = sharedState.llmChat?.items || [];
+  for (let i = items.length - 1; i >= 0; i--) {
+    const m = items[i];
+    if (m && m.role === 'assistant' && m.id) {
+      voiceLastSpokenMsgId = m.id;
+      return;
+    }
+  }
+  voiceLastSpokenMsgId = '';
+}
+
+function voiceMaybeSpeakLastAssistant() {
+  if (!voicePrefs().speak) return;
+  if (typeof speechSynthesis === 'undefined') return;
+  const chat = sharedState.llmChat;
+  if (!chat || chat.busy || chat.streamPartial) return;
+  const items = chat.items || [];
+  const last = items[items.length - 1];
+  if (!last || last.role !== 'assistant') return;
+  const text = String(last.content || '').trim();
+  if (!text) return;
+  const id = last.id || '';
+  if (id && id === voiceLastSpokenMsgId) return;
+  voiceLastSpokenMsgId = id || `spoke_${Date.now()}`;
+  voiceQueueSpeak(stripForSpeech(text));
+}
+
+function getSpeechRecognitionCtor() {
+  return typeof window !== 'undefined'
+    ? window.SpeechRecognition || window.webkitSpeechRecognition || null
+    : null;
+}
+
+/**
+ * Chrome/Chromium often need an explicit mic grant before SpeechRecognition works.
+ * We request audio briefly then stop tracks so the recognizer can run.
+ */
+async function voicePrimeMicPermission() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+    return { ok: true };
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(t => {
+      try {
+        t.stop();
+      } catch {
+        /* ignore */
+      }
+    });
+    voiceLastError = '';
+    return { ok: true };
+  } catch (e) {
+    const name = e && e.name ? e.name : 'Error';
+    const msg = e && e.message ? e.message : String(e);
+    voiceLastError = `getUserMedia: ${name} — ${msg}`;
+    return { ok: false, name, message: msg };
+  }
+}
+
+function voiceQueueSpeak(text) {
+  if (!text || typeof speechSynthesis === 'undefined') return;
+  const run = () => {
+    try {
+      speechSynthesis.cancel();
+      try {
+        speechSynthesis.resume();
+      } catch {
+        /* ignore */
+      }
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = navigator.language || 'en-US';
+      u.onerror = ev => {
+        voiceLastError = `TTS: ${ev?.error || 'error'}`;
+        console.warn('[SouthStack P2P] Voice TTS error:', ev?.error || ev);
+      };
+      speechSynthesis.speak(u);
+    } catch (e) {
+      voiceLastError = `TTS: ${e?.message || e}`;
+      console.warn('[SouthStack P2P] Voice speak:', e);
+    }
+  };
+  const voices = speechSynthesis.getVoices?.() || [];
+  if (voices.length > 0) {
+    run();
+    return;
+  }
+  const onVoices = () => {
+    try {
+      speechSynthesis.removeEventListener('voiceschanged', onVoices);
+    } catch {
+      /* ignore */
+    }
+    run();
+  };
+  speechSynthesis.addEventListener('voiceschanged', onVoices);
+  setTimeout(() => {
+    try {
+      speechSynthesis.removeEventListener('voiceschanged', onVoices);
+    } catch {
+      /* ignore */
+    }
+    run();
+  }, 750);
+}
+
+/** @type {string} */
+let voiceBaseValue = '';
+
+function updateVoiceMicButtons() {
+  const askBtn = document.getElementById('voiceMicAskBtn');
+  const taskBtn = document.getElementById('voiceMicTaskBtn');
+  for (const b of [askBtn, taskBtn]) {
+    if (!b) continue;
+    const isThis =
+      voiceListening &&
+      ((b === askBtn && voiceBoundField === document.getElementById('askLlmInput')) ||
+        (b === taskBtn && voiceBoundField === document.getElementById('taskInput')));
+    b.classList.toggle('voice-mic-listening', !!isThis);
+    b.setAttribute('aria-pressed', isThis ? 'true' : 'false');
+  }
+}
+
+function stopVoiceListening(fromUserIntent = false) {
+  if (fromUserIntent) voiceUserRequestedStop = true;
+  if (fromUserIntent) voiceSessionActive = false;
+  if (!voiceRecognition) {
+    voiceListening = false;
+    if (fromUserIntent) {
+      const wasAsk = voiceBoundField === document.getElementById('askLlmInput');
+      voiceBoundField = null;
+      voiceUserRequestedStop = false;
+      updateVoiceMicButtons();
+      if (wasAsk) voiceTryAutoSendAsk();
+    } else {
+      updateVoiceMicButtons();
+    }
+    return;
+  }
+  try {
+    voiceRecognition.stop();
+  } catch {
+    /* ignore */
+  }
+}
+
+function voiceTryAutoSendAsk() {
+  const p = voicePrefs();
+  const field = document.getElementById('askLlmInput');
+  if (!p.autoSendAsk || !field) return;
+  const t = typeof field.value === 'string' ? field.value.trim() : '';
+  if (!t) return;
+  void askCodingLLM();
+}
+
+function setVoiceInlineHint(text) {
+  const el = document.getElementById('voiceInlineHint');
+  if (el) el.textContent = text || '';
+}
+
+async function startVoiceListeningForField(fieldId) {
+  const field = document.getElementById(fieldId);
+  const SR = getSpeechRecognitionCtor();
+  if (!field || (field.tagName !== 'TEXTAREA' && field.tagName !== 'INPUT')) {
+    log('Voice: field not found.');
+    return;
+  }
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    setVoiceInlineHint(
+      'Tip: if the mic does nothing, open via https:// or http://localhost — plain http:// on a LAN IP is often blocked.'
+    );
+  }
+  if (!SR) {
+    voiceLastError = 'SpeechRecognition API missing';
+    log('Voice input is not supported in this browser (needs Speech Recognition). Try Chrome / Edge.');
+    setVoiceInlineHint('Voice dictation needs Chrome or Edge (Web Speech API).');
+    return;
+  }
+
+
+  if (voiceListening && voiceBoundField === field) {
+    stopVoiceListening(true);
+    return;
+  }
+
+  if (voiceStartInProgress) {
+    log('Voice: starting — please wait a moment.');
+    return;
+  }
+  voiceStartInProgress = true;
+  try {
+    const prime = await voicePrimeMicPermission();
+    if (!prime.ok) {
+      log(`Voice: ${voiceLastError}`);
+      setVoiceInlineHint(
+        'Microphone blocked or unavailable. Allow microphone for this site (lock icon in the address bar), then try again.'
+      );
+      return;
+    }
+
+    const sessionGen = ++voiceTurnGeneration;
+    if (voiceListening) stopVoiceListening(false);
+
+    stopSpeaking();
+    setVoiceInlineHint('Listening… speak now. Tap the mic again to stop.');
+    voiceBoundField = field;
+    voiceBaseValue = typeof field.value === 'string' ? field.value : '';
+    voiceFinalTranscript = '';
+    voiceListening = true;
+    voiceSessionActive = true;
+    voiceUserRequestedStop = false;
+    updateVoiceMicButtons();
+
+    let segmentRestartsLeft = 24;
+
+    function wireRecognition(rec) {
+    voiceRecognition = rec;
+    rec.lang = navigator.language || 'en-US';
+    rec.continuous = true;
+    rec.interimResults = true;
+    try {
+      rec.maxAlternatives = 1;
+    } catch {
+      /* ignore */
+    }
+
+    rec.onresult = ev => {
+      if (sessionGen !== voiceTurnGeneration || !voiceBoundField) return;
+      let interim = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i];
+        const piece = (r[0] && r[0].transcript) || '';
+        if (r.isFinal) voiceFinalTranscript += piece;
+        else interim += piece;
+      }
+      let tail = voiceFinalTranscript + interim;
+      if (voiceBaseValue && tail && !/\s$/.test(voiceBaseValue) && !/^\s/.test(tail)) tail = ` ${tail}`;
+      voiceBoundField.value = voiceBaseValue + tail;
+    };
+
+    rec.onerror = ev => {
+      const msg = ev.error || 'unknown';
+      if (sessionGen !== voiceTurnGeneration) return;
+      voiceLastError = `recognition: ${msg}`;
+      if (msg === 'not-allowed' || msg === 'service-not-allowed') {
+        voiceSessionActive = false;
+        voiceListening = false;
+        voiceBoundField = null;
+        voiceRecognition = null;
+        voiceUserRequestedStop = false;
+        updateVoiceMicButtons();
+        log('Voice: microphone blocked — allow microphone for this site in browser settings.');
+        setVoiceInlineHint('Microphone blocked — check browser site permissions.');
+        return;
+      }
+      if (msg === 'network') {
+        log('Voice: network error — Chrome speech recognition needs internet (cloud). Check connection / VPN / ad-blockers.');
+        setVoiceInlineHint(
+          'Voice recognition needs internet: Chrome sends audio to Google. Go online, disable strict blockers, or try another network.'
+        );
+        voiceSessionActive = false;
+        voiceListening = false;
+        voiceBoundField = null;
+        voiceRecognition = null;
+        updateVoiceMicButtons();
+        return;
+      }
+      if (msg === 'audio-capture') {
+        log('Voice: no microphone found or capture failed.');
+        setVoiceInlineHint('No microphone detected or capture failed — plug in a mic and allow access.');
+        voiceSessionActive = false;
+        voiceListening = false;
+        voiceBoundField = null;
+        voiceRecognition = null;
+        updateVoiceMicButtons();
+        return;
+      }
+      if (msg !== 'aborted' && msg !== 'no-speech') log(`Voice: ${msg}`);
+    };
+
+    rec.onend = () => {
+      if (sessionGen !== voiceTurnGeneration) return;
+      voiceRecognition = null;
+
+      if (voiceUserRequestedStop) {
+        voiceUserRequestedStop = false;
+        voiceSessionActive = false;
+        voiceListening = false;
+        const wasAsk = voiceBoundField === document.getElementById('askLlmInput');
+        voiceBoundField = null;
+        updateVoiceMicButtons();
+        if (wasAsk) voiceTryAutoSendAsk();
+        setVoiceInlineHint('');
+        return;
+      }
+
+      if (voiceSessionActive && voiceBoundField && segmentRestartsLeft > 0) {
+        segmentRestartsLeft -= 1;
+        try {
+          const Next = getSpeechRecognitionCtor();
+          if (!Next) {
+            voiceSessionActive = false;
+            voiceListening = false;
+            voiceBoundField = null;
+            updateVoiceMicButtons();
+            return;
+          }
+          const nr = new Next();
+          wireRecognition(nr);
+          nr.start();
+        } catch (e) {
+          log(`Voice: could not continue (${e.message || e}).`);
+          voiceSessionActive = false;
+          voiceListening = false;
+          voiceBoundField = null;
+          updateVoiceMicButtons();
+        }
+        return;
+      }
+
+      voiceSessionActive = false;
+      voiceListening = false;
+      voiceBoundField = null;
+      updateVoiceMicButtons();
+      setVoiceInlineHint('');
+    };
+    }
+
+    try {
+      const rec = new SR();
+      wireRecognition(rec);
+      rec.start();
+      voiceLastError = '';
+    } catch (e) {
+      voiceSessionActive = false;
+      voiceListening = false;
+      voiceBoundField = null;
+      voiceRecognition = null;
+      updateVoiceMicButtons();
+      const err = e?.message || String(e);
+      voiceLastError = `start: ${err}`;
+      log(`Voice: could not start (${err}).`);
+      if (typeof window !== 'undefined' && window.isSecureContext === false) {
+        setVoiceInlineHint('Voice needs a secure origin: use https:// or http://127.0.0.1 — not http://192.168… in Chrome.');
+      } else if (/secure|permission|not allowed/i.test(err)) {
+        setVoiceInlineHint('Voice failed to start — allow the microphone or try HTTPS / localhost.');
+      }
+    }
+  } finally {
+    voiceStartInProgress = false;
+  }
+}
+
+function updateVoiceSettingsMenuLabels() {
+  const p = voicePrefs();
+  const speakBtn = document.getElementById('waVoiceSpeakToggle');
+  const autoBtn = document.getElementById('waVoiceAutoSendToggle');
+  if (speakBtn) speakBtn.textContent = p.speak ? 'Voice: speak replies — On' : 'Voice: speak replies — Off';
+  if (autoBtn) autoBtn.textContent = p.autoSendAsk ? 'Voice: auto-send Ask — On' : 'Voice: auto-send Ask — Off';
+}
+
+function initVoiceControls() {
+  if (typeof window !== 'undefined' && window.__southstackVoiceUiInit) return;
+  if (typeof window !== 'undefined') window.__southstackVoiceUiInit = true;
+
+  const speakBtn = document.getElementById('waVoiceSpeakToggle');
+  const autoBtn = document.getElementById('waVoiceAutoSendToggle');
+  if (speakBtn) {
+    speakBtn.addEventListener('click', () => {
+      voiceSetSpeak(!voicePrefs().speak);
+      updateVoiceSettingsMenuLabels();
+    });
+  }
+  if (autoBtn) {
+    autoBtn.addEventListener('click', () => {
+      voiceSetAutoSendAsk(!voicePrefs().autoSendAsk);
+      updateVoiceSettingsMenuLabels();
+    });
+  }
+  updateVoiceSettingsMenuLabels();
+}
+
 function isProgrammingPrompt(text) {
   const raw = String(text || '').trim();
   if (!raw) return false;
@@ -1257,6 +1708,7 @@ function refreshAskLlmDisplay() {
     out.scrollTop = out.scrollHeight;
   }
   updateAskUiLocks();
+  voiceMaybeSpeakLastAssistant();
 }
 
 function enqueueLeaderLlm(task) {
@@ -1406,13 +1858,92 @@ function isPeerReachableForWork(peerId) {
   return !!(ch && ch.readyState === 'open');
 }
 
+/**
+ * Deterministic host election: among peers we are connected to (open data channel + self),
+ * the host is the lexicographically smallest peerId. Same inputs → same host everywhere → no election storm.
+ */
 function computeLeader() {
-  let ids = connectedPeerIdsForElection();
+  const ids = connectedPeerIdsForElection();
   if (ids.length === 0) return localPeerId;
-  const withGpu = ids.filter(id => peerWebGpuByPeer.get(id) === true);
-  const pool = withGpu.length > 0 ? withGpu : ids;
-  pool.sort();
-  return pool[0];
+  const sorted = [...ids].sort((a, b) => a.localeCompare(b));
+  return sorted[0];
+}
+
+function stopHostHeartbeatTimer() {
+  if (hostHeartbeatTimer) {
+    clearInterval(hostHeartbeatTimer);
+    hostHeartbeatTimer = null;
+  }
+}
+
+function stopClientHostWatchdog() {
+  if (clientHostWatchdogTimer) {
+    clearInterval(clientHostWatchdogTimer);
+    clientHostWatchdogTimer = null;
+  }
+}
+
+function ensureHostCoordinationTimers() {
+  if (P2PAgents.isLeader && channelsByPeer.size > 0) {
+    stopClientHostWatchdog();
+    if (!hostHeartbeatTimer) {
+      broadcast({ type: 'heartbeat', from: localPeerId });
+      hostHeartbeatTimer = setInterval(() => {
+        if (!P2PAgents.isLeader || channelsByPeer.size === 0) return;
+        broadcast({ type: 'heartbeat', from: localPeerId });
+      }, HOST_HEARTBEAT_INTERVAL_MS);
+    }
+  } else if (!P2PAgents.isLeader && channelsByPeer.size > 0 && P2PAgents.leaderId) {
+    stopHostHeartbeatTimer();
+    if (!clientHostWatchdogTimer) {
+      clientHostWatchdogTimer = setInterval(() => {
+        checkClientHostHeartbeatWatchdog();
+      }, 1000);
+    }
+  } else {
+    stopHostHeartbeatTimer();
+    stopClientHostWatchdog();
+  }
+}
+
+function checkClientHostHeartbeatWatchdog() {
+  if (P2PAgents.isLeader) return;
+  if (channelsByPeer.size === 0 || !P2PAgents.leaderId) return;
+  if (Date.now() < hostFailoverCooldownUntil) return;
+  const now = Date.now();
+  if (!lastHostHeartbeatAt || now - lastHostHeartbeatAt < HOST_HEARTBEAT_MISS_MS) return;
+  void performHostFailoverDueToMissedHeartbeat();
+}
+
+function performHostFailoverDueToMissedHeartbeat() {
+  const leader = P2PAgents.leaderId;
+  if (!leader || P2PAgents.isLeader) return;
+  if (Date.now() < hostFailoverCooldownUntil) return;
+  hostFailoverCooldownUntil = Date.now() + HOST_FAILOVER_COOLDOWN_MS;
+  console.info('[FAILOVER] Host lost → electing new host');
+  log('[FAILOVER] Host lost → electing new host');
+  const dc = channelsByPeer.get(leader);
+  if (dc) {
+    try {
+      dc.close();
+    } catch {
+      /* ignore */
+    }
+    // onTransportGone runs from channel onclose; if it did not fire, fall back once.
+    queueMicrotask(() => {
+      if (channelsByPeer.has(leader)) {
+        onTransportGone(leader, 'host_heartbeat_lost');
+      }
+    });
+  } else {
+    applyLeader();
+    reassignOrphanSubtasks();
+    void (async () => {
+      await flushPendingSubtasksAfterFailover();
+      await continueGenerationAfterFailover();
+    })();
+  }
+  lastHostHeartbeatAt = Date.now();
 }
 
 function applyLeader() {
@@ -1420,9 +1951,24 @@ function applyLeader() {
   const was = P2PAgents.leaderId;
   P2PAgents.leaderId = computeLeader();
   P2PAgents.isLeader = P2PAgents.leaderId === localPeerId;
+  P2PAgents.role = P2PAgents.isLeader ? 'host' : 'client';
+
+  const roleLine = P2PAgents.isLeader ? '[ROLE] I am HOST' : '[ROLE] I am CLIENT';
+  if (lastLoggedRole !== P2PAgents.role) {
+    lastLoggedRole = P2PAgents.role;
+    console.info(roleLine);
+    log(roleLine);
+  }
+
   if (was !== P2PAgents.leaderId) {
     log(`Host device: ${P2PAgents.leaderId.slice(0, 8)}… (${P2PAgents.isLeader ? 'this device' : 'another device'})`);
+    console.info(`[ELECTION] New host elected: ${P2PAgents.leaderId}`);
+    log(`[ELECTION] New host elected: ${P2PAgents.leaderId}`);
+    lastElectedHostId = P2PAgents.leaderId;
   }
+
+  lastHostHeartbeatAt = Date.now();
+
   if (!wasLeader && P2PAgents.isLeader) {
     log(
       'This device is now the coordinator (WhatsApp-style: one Ask at a time; everyone sees the reply). Preloading the model if WebGPU is available…'
@@ -1432,7 +1978,17 @@ function applyLeader() {
         'AI could not load on this device — use a desktop Chrome with WebGPU for Ask, or reconnect a PC that was coordinator before.'
       );
     });
+    try {
+      broadcastState();
+    } catch {
+      /* ignore */
+    }
   }
+  currentCoordinator = P2PAgents.leaderId;
+  isLocalCoordinator = P2PAgents.isLeader;
+  updateCoordinatorUI();
+
+  ensureHostCoordinationTimers();
   updatePeers();
 }
 
@@ -2871,7 +3427,7 @@ async function handleMessage(msg, dc) {
       return;
     }
   }
-  const fromLeaderOnly = new Set(['subtask', 'state', 'request_continue']);
+  const fromLeaderOnly = new Set(['subtask', 'state', 'request_continue', 'heartbeat']);
   if (remotePeerId && fromLeaderOnly.has(msg?.type)) {
     if (P2PAgents.leaderId && remotePeerId !== P2PAgents.leaderId) {
       log(`Rejected unauthorized ${msg.type} from ${String(remotePeerId).slice(0, 8)}…`);
@@ -2882,6 +3438,20 @@ async function handleMessage(msg, dc) {
     case 'ack':
       dbgP2P('ACK <-', msg.ackedId || null, { from: remotePeerId || msg.from || null });
       break;
+    case 'heartbeat': {
+      const hostSender = remotePeerId || msg.from || null;
+      if (!hostSender || hostSender !== P2PAgents.leaderId) break;
+      lastHostHeartbeatAt = Date.now();
+      dbgP2P('[HEARTBEAT] received', { from: hostSender });
+      {
+        const n = Date.now();
+        if (n - lastHeartbeatPublicLogAt > 12000) {
+          lastHeartbeatPublicLogAt = n;
+          console.info('[HEARTBEAT] received');
+        }
+      }
+      break;
+    }
     case 'hello': {
       clearP2PLinkWatchdog();
       const pid = msg.peerId;
@@ -3456,6 +4026,8 @@ async function assignTask() {
   const taskEl = document.getElementById('taskInput');
   const task = taskEl ? taskEl.value.trim() : '';
   if (!task) return;
+  stopSpeaking();
+  if (voiceListening) stopVoiceListening(false);
 
   await initEngine();
 
@@ -3738,6 +4310,8 @@ async function consoleCodingPrompt(userText, opts = {}) {
 }
 
 async function askCodingLLM() {
+  stopSpeaking();
+  if (voiceListening) stopVoiceListening(false);
   const inp = document.getElementById('askLlmInput');
   const btn = document.getElementById('askLlmBtn');
   const text = inp && typeof inp.value === 'string' ? inp.value.trim() : '';
@@ -3780,6 +4354,7 @@ async function askCodingLLM() {
 }
 
 function stopAskCodingLLM() {
+  stopSpeaking();
   const linked = channelsByPeer.size >= 1;
   const busy = !!sharedState.llmChat.busy;
   const guestWait = linked && !P2PAgents.isLeader && !!pendingGuestPrompt;
@@ -3895,6 +4470,63 @@ window.testSendMessage = testSendMessage;
 window.testBroadcast = testBroadcast;
 window.testTask = testTask;
 
+function forceDisconnect() {
+  stopHostHeartbeatTimer();
+  stopClientHostWatchdog();
+  const ids = [...channelsByPeer.keys()];
+  for (const pid of ids) {
+    try {
+      channelsByPeer.get(pid)?.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  queueMicrotask(() => {
+    for (const pid of [...channelsByPeer.keys()]) {
+      onTransportGone(pid, 'force_disconnect');
+    }
+  });
+  try {
+    localConnection?.close();
+  } catch {
+    /* ignore */
+  }
+  localConnection = null;
+  try {
+    pendingLeaderConnection?.close();
+  } catch {
+    /* ignore */
+  }
+  pendingLeaderConnection = null;
+  peerConnectionsByPeer.forEach(pc => {
+    try {
+      pc.close();
+    } catch {
+      /* ignore */
+    }
+  });
+  peerConnectionsByPeer.clear();
+  log('forceDisconnect: closed local P2P links.');
+}
+
+window.forceDisconnect = forceDisconnect;
+window.printPeers = function printPeers() {
+  const snapshot = {
+    peerId: localPeerId,
+    role: P2PAgents.role,
+    hostId: P2PAgents.leaderId,
+    connectedPeerIds: [...channelsByPeer.keys()],
+    knownPeerIds: [...P2PAgents.knownPeerIds]
+  };
+  console.log('[printPeers]', snapshot);
+  return snapshot;
+};
+window.printRole = function printRole() {
+  const o = { peerId: localPeerId, role: P2PAgents.role, hostId: P2PAgents.leaderId };
+  console.log('[printRole]', o);
+  return o;
+};
+
 /** Legacy southstack / southstack-demo: console-only prompt (user message, no coding filter). */
 window.ask = legacyConsoleAsk;
 
@@ -3918,12 +4550,25 @@ window.SouthStack = {
       modelName: lastLoadedModelId,
       roomId: P2PAgents.roomId || null,
       isCoordinator: !!P2PAgents.isLeader,
+      role: P2PAgents.role,
+      hostId: P2PAgents.leaderId || null,
+      peerId: localPeerId,
       linkedPeers: channelsByPeer.size
     };
   },
   reset: () => {
     window.location.reload();
-  }
+  },
+  /** Console: SouthStack.getVoiceSupport() — mic/TTS prerequisites. */
+  getVoiceSupport: () => ({
+    secureContext: typeof window !== 'undefined' ? !!window.isSecureContext : null,
+    speechRecognition: !!getSpeechRecognitionCtor(),
+    speechSynthesis: typeof speechSynthesis !== 'undefined',
+    listening: voiceListening,
+    sessionActive: voiceSessionActive,
+    lastError: voiceLastError || null,
+    prefs: voicePrefs()
+  })
 };
 
 ensureWebGPUAdapterCompat();
@@ -3964,10 +4609,13 @@ async function init() {
   }
   applyLeader();
   updatePeers();
-  
+  initVoiceControls();
+
+  let doInviteAuto = false;
+
   // Trigger coordinator election when new peer joins
   setTimeout(() => checkCoordinatorNeeded(), 500);
-  
+
   if (P2PAgents.isLeader) {
     await restoreCheckpointIfAny();
     const inviteParams = getInviteSearchParams();
@@ -3975,37 +4623,38 @@ async function init() {
     const authFromUrl = (inviteParams.get('auth') || '').trim();
     const saved = !roomFromUrl ? readSessionSnapshot() : null;
     const roomFromSaved = saved?.roomId ? String(saved.roomId).trim() : '';
-    const doInviteAuto = !!roomFromUrl && wantsUrlAutoJoin(inviteParams);
+    doInviteAuto = !!roomFromUrl && wantsUrlAutoJoin(inviteParams);
     if (roomFromUrl) {
       if (authFromUrl) sessionAuthToken = authFromUrl;
       const rid = document.getElementById('roomId');
-    if (rid) rid.value = roomFromUrl;
-    updateJoinLinkField(roomFromUrl);
-    if (doInviteAuto) {
-      updateStatus('Connecting to host (invite link)…', 'pending');
-      setRoomStatus(`Opening invite for room <strong>${roomFromUrl}</strong>…`);
-      void (async () => {
-        await new Promise(r => setTimeout(r, 250));
-        await runInviteAutoJoinFromRoomId(roomFromUrl);
-      })();
+      if (rid) rid.value = roomFromUrl;
+      updateJoinLinkField(roomFromUrl);
+      if (doInviteAuto) {
+        updateStatus('Connecting to host (invite link)…', 'pending');
+        setRoomStatus(`Opening invite for room <strong>${roomFromUrl}</strong>…`);
+        void (async () => {
+          await new Promise(r => setTimeout(r, 250));
+          await runInviteAutoJoinFromRoomId(roomFromUrl);
+        })();
+      }
+    } else if (roomFromSaved) {
+      if (saved?.authToken) sessionAuthToken = String(saved.authToken);
+      const rid2 = document.getElementById('roomId');
+      if (rid2) rid2.value = roomFromSaved;
+      P2PAgents.roomId = roomFromSaved;
+      ensureSignalBus(roomFromSaved);
+      updateJoinLinkField(roomFromSaved);
+      setRoomStatus(
+        `Recovered previous room <strong>${roomFromSaved}</strong>. Reconnecting to peers automatically…`
+      );
+      if (saved?.wasLeader) {
+        void generateNextOffer();
+      } else {
+        scheduleAutoReconnect('restored session');
+      }
+    } else if (params.get('easy') === '1') {
+      void easyStartSessionAndShowQr();
     }
-  } else if (roomFromSaved) {
-    if (saved?.authToken) sessionAuthToken = String(saved.authToken);
-    const rid = document.getElementById('roomId');
-    if (rid) rid.value = roomFromSaved;
-    P2PAgents.roomId = roomFromSaved;
-    ensureSignalBus(roomFromSaved);
-    updateJoinLinkField(roomFromSaved);
-    setRoomStatus(
-      `Recovered previous room <strong>${roomFromSaved}</strong>. Reconnecting to peers automatically…`
-    );
-    if (saved?.wasLeader) {
-      void generateNextOffer();
-    } else {
-      scheduleAutoReconnect('restored session');
-    }
-  } else if (params.get('easy') === '1') {
-    void easyStartSessionAndShowQr();
   }
   log('Ready to connect devices.');
   log(`This device id: ${localPeerId}`);
@@ -4045,6 +4694,10 @@ async function init() {
       updateStatus(`Error: ${e.message}`, 'disconnected');
     }
   }
+  voiceSyncBaselineFromChat();
 }
+
+window.southstackVoiceAsk = () => void startVoiceListeningForField('askLlmInput');
+window.southstackVoiceTask = () => void startVoiceListeningForField('taskInput');
 
 init();

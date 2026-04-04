@@ -143,6 +143,13 @@
         }
         .wa-settings-item:hover { background: #202c33; }
         .wa-settings-item-muted { color: #8696a0; }
+        .wa-settings-divider {
+            height: 1px;
+            margin: 6px 4px;
+            background: #2a3942;
+            border: none;
+            padding: 0;
+        }
         .muted { opacity: 0.85; font-size: 12px; margin-top: 6px; color: #93a3ac; }
         .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
         .panel { background: #111b21; border: 1px solid #2a3942; border-radius: 10px; padding: 12px; }
@@ -612,6 +619,28 @@
         .social-stop:hover {
             background: #763434;
         }
+        button.voice-mic-btn {
+            min-width: 44px;
+            padding: 9px 12px;
+            border-radius: 999px;
+            background: #2a3d4a;
+            font-size: 16px;
+            line-height: 1;
+        }
+        button.voice-mic-btn:hover {
+            background: #3a5262;
+        }
+        button.voice-mic-btn.voice-mic-listening {
+            background: #8b2f2f;
+            animation: voice-pulse 1.1s ease-in-out infinite;
+        }
+        button.voice-mic-btn.voice-mic-listening:hover {
+            background: #a23838;
+        }
+        @keyframes voice-pulse {
+            0%, 100% { filter: brightness(1); box-shadow: 0 0 0 0 rgba(255, 80, 80, 0.35); }
+            50% { filter: brightness(1.08); box-shadow: 0 0 0 6px rgba(255, 80, 80, 0.12); }
+        }
         @media (max-width: 920px) {
             .social-chat-shell { grid-template-columns: 1fr; }
             .social-sidebar { border-right: none; border-bottom: 1px solid #2a3942; }
@@ -814,6 +843,9 @@
                 <a class="nav-guide" href="#help-guide">Help &amp; AI</a>
                 <button type="button" id="waSettingsBtn" class="wa-menu-btn" aria-label="Open WhatsApp-style settings" aria-expanded="false">⋮</button>
                 <div id="waSettingsMenu" class="wa-settings-menu" role="menu" aria-label="Settings options">
+                    <button type="button" class="wa-settings-item" id="waVoiceSpeakToggle" role="menuitem">Voice: speak replies — On</button>
+                    <button type="button" class="wa-settings-item" id="waVoiceAutoSendToggle" role="menuitem">Voice: auto-send Ask — On</button>
+                    <div class="wa-settings-divider" role="separator"></div>
                     <button type="button" class="wa-settings-item" data-target="connect-devices" role="menuitem">Connect devices</button>
                     <button type="button" class="wa-settings-item" data-target="peersSection" role="menuitem">Devices in this room</button>
                     <button type="button" class="wa-settings-item" data-target="activityLogSection" role="menuitem">Activity log</button>
@@ -914,9 +946,11 @@
                         </div>
                         <div class="social-composer">
                             <textarea id="askLlmInput" rows="3" placeholder="Type a message to the coding assistant..."></textarea>
-                            <div class="row">
-                                <span class="social-hint">Press Ask to broadcast to linked devices.</span>
-                                <div style="display:flex;gap:8px;">
+                            <div class="row" style="flex-direction:column;align-items:stretch;gap:6px;">
+                                <span id="voiceInlineHint" class="social-hint" style="color:#ffb47a;min-height:0;" aria-live="polite"></span>
+                                <span class="social-hint">Mic: dictate (Chrome/Edge). Tap again to stop. Auto-send Ask when you stop if enabled in ⋮. Use <strong>https</strong> or <strong>localhost</strong> — plain <code>http://192.168…</code> often blocks the mic API.</span>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                    <button type="button" id="voiceMicAskBtn" class="voice-mic-btn" title="Voice input for Ask" aria-label="Voice input for Ask" aria-pressed="false" onclick="window.southstackVoiceAsk&amp;&amp;window.southstackVoiceAsk()">🎤</button>
                                     <button type="button" id="askLlmStopBtn" class="social-stop" onclick="stopAskCodingLLM()" disabled>Stop</button>
                                     <button type="button" id="askLlmBtn" class="social-send" onclick="askCodingLLM()">Ask</button>
                                 </div>
@@ -1137,7 +1171,10 @@
                 <strong>This phone is a guest.</strong> Only the <strong>coordinator</strong> can tap “Start shared job” — use the device that shows <strong>(coordinator)</strong> under <em>Devices in this room</em>. After they start a job, this device may run a subtask; scroll down for <strong>Activity log</strong> and <strong>Shared result</strong>.
             </p>
             <textarea id="taskInput" placeholder="Example: Build a simple to-do page that saves to the browser" rows="3"></textarea>
-            <button type="button" id="startSharedJobBtn" onclick="assignTask()">Start shared job</button>
+            <div class="row" style="margin-top:8px;align-items:center;">
+                <button type="button" id="voiceMicTaskBtn" class="voice-mic-btn btn-secondary" title="Voice input for job description" aria-label="Voice input for job description" aria-pressed="false" onclick="window.southstackVoiceTask&amp;&amp;window.southstackVoiceTask()">🎤 Job</button>
+                <button type="button" id="startSharedJobBtn" onclick="assignTask()">Start shared job</button>
+            </div>
         </div>
 
         <!-- Peers -->
@@ -1279,7 +1316,7 @@
     </div>
 
     <script src="./webgpu-early-compat.js?v=3"></script>
-    <script type="module" src="./main.js?v=38"></script>
+    <script type="module" src="./main.js?v=42"></script>
     <script>
     // Network Discovery Functions
     function discoverNetworkURLs() {
