@@ -3,6 +3,8 @@
  * WebGPU LLM + WebRTC + shared state sync + checkpointing + leader election
  */
 
+import { mergeLlmChatItems } from './p2p-state-merge.js';
+
 /** WebRTC expects CRLF; browsers/textareas often use LF-only when pasting. */
 function sdpToCrLf(s) {
   const normalized = (s || '').replace(/\r?\n/g, '\r\n').trim();
@@ -257,12 +259,14 @@ function buildContextRoutedSubtasks(task) {
 
 function compactStateForWire(raw) {
   const state = structuredClone(raw);
-  const maxPartial = 2000;
+  // Relaxed caps: large shared chat / plan streams must survive real LAN sync (DC ~16MB budget).
+  const maxPartial = 120000;
+  const maxChatItems = 500;
   if (state?.generation?.partialOutput && state.generation.partialOutput.length > maxPartial) {
     state.generation.partialOutput = state.generation.partialOutput.slice(-maxPartial);
   }
-  if (Array.isArray(state?.llmChat?.items) && state.llmChat.items.length > 20) {
-    state.llmChat.items = state.llmChat.items.slice(-20);
+  if (Array.isArray(state?.llmChat?.items) && state.llmChat.items.length > maxChatItems) {
+    state.llmChat.items = state.llmChat.items.slice(-maxChatItems);
   }
   if (typeof state?.llmChat?.streamPartial === 'string' && state.llmChat.streamPartial.length > maxPartial) {
     state.llmChat.streamPartial = state.llmChat.streamPartial.slice(-maxPartial);
@@ -318,6 +322,8 @@ let activeSharedAskStop = null;
 /** Auto-reconnect timer when link drops. */
 let reconnectTimer = null;
 let reconnectAttempt = 0;
+/** After any link loss, next open channel pushes a full state snapshot once (star topology convergence). */
+let p2pNeedsFullResync = false;
 let sessionAuthToken = '';
 /** Last time this peer saw a valid host heartbeat (clients only). */
 let lastHostHeartbeatAt = 0;
@@ -2214,7 +2220,10 @@ function sendOnChannel(dc, msg, toPeerId = null) {
   const wire = toWireEnvelope(msg, toPeerId || dc._remotePeerId || null);
   if (!wire) return false;
   try {
-    dc.send(JSON.stringify(wire));
+    const bytes = JSON.stringify(wire);
+    const remoteId = toPeerId || dc._remotePeerId || '?';
+    console.log('[SEND]', remoteId, bytes.length);
+    dc.send(bytes);
     dbgP2P('SEND ->', wire.type, { id: wire.id, to: wire.to || null });
     return true;
   } catch (e) {
@@ -2245,8 +2254,9 @@ function cloneLlmChat(raw) {
   };
 }
 
-function mergeIncomingState(remote) {
+function mergeIncomingState(remote, opts = {}) {
   if (!remote || typeof remote !== 'object') return;
+  const allowRelay = opts.allowRelay !== false;
   const remoteVersion = Number(remote.version || 0);
   const localVersion = Number(sharedState.version || 0);
   const preferRemote = remoteVersion >= localVersion;
@@ -2269,6 +2279,10 @@ function mergeIncomingState(remote) {
       result: done ? (st.result || prev.result || '') : (preferRemote ? st.result : prev.result)
     });
   }
+  const mergedChat =
+    remote.llmChat != null && typeof remote.llmChat === 'object'
+      ? mergeLlmChatItems(sharedState.llmChat?.items, remote.llmChat.items, preferRemote)
+      : cloneLlmChat(sharedState.llmChat);
   sharedState = {
     ...sharedState,
     ...(preferRemote ? remote : {}),
@@ -2277,10 +2291,7 @@ function mergeIncomingState(remote) {
     generation: remote.generation
       ? { ...sharedState.generation, ...remote.generation }
       : sharedState.generation,
-    llmChat:
-      remote.llmChat != null && typeof remote.llmChat === 'object'
-        ? cloneLlmChat(preferRemote ? remote.llmChat : { ...sharedState.llmChat, ...remote.llmChat })
-        : cloneLlmChat(sharedState.llmChat)
+    llmChat: mergedChat
   };
   if (pendingGuestPrompt && (sharedState.llmChat.items || []).length > 0) {
     pendingGuestPrompt = null;
@@ -2290,6 +2301,20 @@ function mergeIncomingState(remote) {
     setOutput(sharedState.generation.partialOutput);
   }
   refreshAskLlmDisplay();
+  if (allowRelay) {
+    relayMergedStateFromHost(opts.fromPeerId || null);
+  }
+}
+
+/** Star topology: host fans out merged CRDT state so guests (no guest↔guest link) converge. */
+function relayMergedStateFromHost(fromPeerId) {
+  if (!P2PAgents.isLeader || !fromPeerId) return;
+  if (fromPeerId === localPeerId) return;
+  const snap = compactStateForWire(sharedState);
+  for (const [pid, ch] of channelsByPeer.entries()) {
+    if (!pid || pid === fromPeerId || !ch || ch.readyState !== 'open') continue;
+    sendOnChannel(ch, { type: 'state', state: snap }, pid);
+  }
 }
 
 /** @param {RTCDataChannel} dc */
@@ -2303,9 +2328,18 @@ function sendHello(dc) {
   });
 }
 
+function pushFullStateOnDataChannel(dc) {
+  if (!dc || dc.readyState !== 'open') return;
+  const snap = compactStateForWire(sharedState);
+  sendOnChannel(dc, { type: 'state', state: snap });
+  console.log('[FULL SYNC SENT]', dc._remotePeerId || 'pending');
+}
+
 function broadcastState() {
   bumpVersion();
-  broadcast({ type: 'state', state: compactStateForWire(sharedState) });
+  const snap = compactStateForWire(sharedState);
+  broadcast({ type: 'state', state: snap });
+  console.log('[FULL SYNC SENT]', 'all_peers');
   saveCheckpoint();
 }
 
@@ -3004,6 +3038,7 @@ function wireConnectionState(pc) {
 
 function onTransportGone(peerId, reason = 'unknown') {
   if (!peerId || !channelsByPeer.has(peerId)) return;
+  p2pNeedsFullResync = true;
   log(`A device left (${peerId.slice(0, 8)}…). Reason: ${reason}.`);
   if (reason === 'stale_heartbeat' || reason === 'ping_send_failed') {
     metricsState.transportDrops = (metricsState.transportDrops || 0) + 1;
@@ -3365,22 +3400,42 @@ function setupDataChannel(dc, remoteKey, pc = null) {
     updateStatus('Connected. Devices can share work.', 'connected');
     setRoomStatus(`Connected in room <strong>${P2PAgents.roomId || 'unknown'}</strong> — ${P2PAgents.knownPeerIds.size} device(s).`);
     sendHello(dc);
+    if (p2pNeedsFullResync) {
+      try {
+        pushFullStateOnDataChannel(dc);
+        p2pNeedsFullResync = false;
+        console.log('[FULL SYNC SENT/APPLIED]', dc._remotePeerId || 'pending');
+      } catch {
+        /* ignore */
+      }
+    }
     stopCandidatePolling('pending-join');
     startSyncTimer();
     persistSessionSnapshot();
   };
   dc.onmessage = async e => {
+    const remoteId = dc._remotePeerId || '?';
+    if (typeof e.data === 'string') {
+      console.log('[RECV]', remoteId, e.data.length);
+    } else if (e.data && typeof e.data === 'object' && typeof e.data.byteLength === 'number') {
+      console.log('[RECV]', remoteId, e.data.byteLength);
+    } else {
+      console.log('[RECV]', remoteId, 0);
+    }
     let raw;
     try {
       raw = JSON.parse(e.data);
     } catch {
+      console.log('[DROP]', 'json_parse_failed');
       return;
     }
     const msg = normalizeIncomingMessage(raw);
     if (!msg || !msg.type) {
       dbgP2P('RECV malformed', raw);
+      console.log('[DROP]', 'normalize_failed');
       return;
     }
+    console.log('[PARSED FRAME]', msg.type);
     dbgP2P('RECV <-', msg.type, { id: msg.id || null, from: msg.from || null });
     // Generic ACK for all envelope messages with ids (except ACK itself).
     if (msg.id && msg.type !== 'ack') {
@@ -3427,9 +3482,10 @@ async function handleMessage(msg, dc) {
       return;
     }
   }
-  const fromLeaderOnly = new Set(['subtask', 'state', 'request_continue', 'heartbeat']);
+  const fromLeaderOnly = new Set(['subtask', 'request_continue', 'heartbeat']);
   if (remotePeerId && fromLeaderOnly.has(msg?.type)) {
     if (P2PAgents.leaderId && remotePeerId !== P2PAgents.leaderId) {
+      console.log('[DROP]', `unauthorized_${msg.type}_not_leader`);
       log(`Rejected unauthorized ${msg.type} from ${String(remotePeerId).slice(0, 8)}…`);
       return;
     }
@@ -3534,9 +3590,16 @@ async function handleMessage(msg, dc) {
       });
       break;
     }
-    case 'state':
-      mergeIncomingState(msg.state);
+    case 'state': {
+      const st = msg.state;
+      if (!st || typeof st !== 'object') {
+        console.log('[DROP]', 'state_missing_payload');
+        break;
+      }
+      console.log('[APPLY]', remotePeerId || '?', JSON.stringify(st).length);
+      mergeIncomingState(st, { fromPeerId: remotePeerId || null });
       break;
+    }
     case 'token':
     case 'checkpoint': {
       if (msg.generation) {
