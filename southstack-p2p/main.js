@@ -3,7 +3,18 @@
  * WebGPU LLM + WebRTC + shared state sync + checkpointing + leader election
  */
 
-import { mergeLlmChatItems } from './p2p-state-merge.js';
+import { mergeLlmChatItems, shouldPreferRemoteMerge } from './p2p-state-merge.js';
+import {
+  meshMarkPeerNeedsResync,
+  meshTakePeerNeedsResync,
+  meshLogSend,
+  meshLogRecv,
+  meshLogParsed,
+  meshLogApply,
+  meshLogDrop,
+  meshLogFullSyncSent,
+  meshLogFullSyncApplied
+} from './WebRTCMesh.js';
 
 /** WebRTC expects CRLF; browsers/textareas often use LF-only when pasting. */
 function sdpToCrLf(s) {
@@ -324,6 +335,8 @@ let reconnectTimer = null;
 let reconnectAttempt = 0;
 /** After any link loss, next open channel pushes a full state snapshot once (star topology convergence). */
 let p2pNeedsFullResync = false;
+/** First inbound `state` from a remote after a transport drop accepts full snapshot merge (version skew). */
+let forceFirstStateAfterReconnect = false;
 let sessionAuthToken = '';
 /** Last time this peer saw a valid host heartbeat (clients only). */
 let lastHostHeartbeatAt = 0;
@@ -2222,7 +2235,7 @@ function sendOnChannel(dc, msg, toPeerId = null) {
   try {
     const bytes = JSON.stringify(wire);
     const remoteId = toPeerId || dc._remotePeerId || '?';
-    console.log('[SEND]', remoteId, bytes.length);
+    meshLogSend(remoteId, bytes.length);
     dc.send(bytes);
     dbgP2P('SEND ->', wire.type, { id: wire.id, to: wire.to || null });
     return true;
@@ -2259,7 +2272,7 @@ function mergeIncomingState(remote, opts = {}) {
   const allowRelay = opts.allowRelay !== false;
   const remoteVersion = Number(remote.version || 0);
   const localVersion = Number(sharedState.version || 0);
-  const preferRemote = remoteVersion >= localVersion;
+  const preferRemote = shouldPreferRemoteMerge(localVersion, remoteVersion, opts);
   const mergedSubtasksById = new Map();
   for (const st of Array.isArray(sharedState.subtasks) ? sharedState.subtasks : []) {
     mergedSubtasksById.set(st.id, { ...st });
@@ -2332,14 +2345,14 @@ function pushFullStateOnDataChannel(dc) {
   if (!dc || dc.readyState !== 'open') return;
   const snap = compactStateForWire(sharedState);
   sendOnChannel(dc, { type: 'state', state: snap });
-  console.log('[FULL SYNC SENT]', dc._remotePeerId || 'pending');
+  meshLogFullSyncSent(String(dc._remotePeerId || 'pending'));
 }
 
 function broadcastState() {
   bumpVersion();
   const snap = compactStateForWire(sharedState);
   broadcast({ type: 'state', state: snap });
-  console.log('[FULL SYNC SENT]', 'all_peers');
+  meshLogFullSyncSent('all_peers');
   saveCheckpoint();
 }
 
@@ -2348,7 +2361,6 @@ function startSyncTimer() {
   syncTimer = setInterval(() => {
     runTransportHealthCheck();
     if (channelsByPeer.size === 0) return;
-    bumpVersion();
     broadcast({ type: 'state', state: compactStateForWire(sharedState) });
   }, CONFIG.syncIntervalMs);
 }
@@ -3003,6 +3015,16 @@ function wireConnectionState(pc) {
     log(`Connection: ${s}`);
     console.info('[SouthStack P2P] WebRTC connectionState:', s);
     dbgP2P('RTC connectionState', s);
+    if (s === 'disconnected' || s === 'failed') {
+      for (const [pid, conn] of peerConnectionsByPeer.entries()) {
+        if (conn === pc) {
+          p2pNeedsFullResync = true;
+          forceFirstStateAfterReconnect = true;
+          meshMarkPeerNeedsResync(pid);
+          break;
+        }
+      }
+    }
     if (s === 'failed') {
       log('WebRTC connection failed — same Wi‑Fi? Try ?offline=1 on BOTH devices, or check firewall.');
       try {
@@ -3039,6 +3061,8 @@ function wireConnectionState(pc) {
 function onTransportGone(peerId, reason = 'unknown') {
   if (!peerId || !channelsByPeer.has(peerId)) return;
   p2pNeedsFullResync = true;
+  forceFirstStateAfterReconnect = true;
+  meshMarkPeerNeedsResync(peerId);
   log(`A device left (${peerId.slice(0, 8)}…). Reason: ${reason}.`);
   if (reason === 'stale_heartbeat' || reason === 'ping_send_failed') {
     metricsState.transportDrops = (metricsState.transportDrops || 0) + 1;
@@ -3400,11 +3424,17 @@ function setupDataChannel(dc, remoteKey, pc = null) {
     updateStatus('Connected. Devices can share work.', 'connected');
     setRoomStatus(`Connected in room <strong>${P2PAgents.roomId || 'unknown'}</strong> — ${P2PAgents.knownPeerIds.size} device(s).`);
     sendHello(dc);
-    if (p2pNeedsFullResync) {
+    const openPeerId = dc._remotePeerId || null;
+    if (P2PAgents.isLeader && p2pNeedsFullResync) {
       try {
         pushFullStateOnDataChannel(dc);
         p2pNeedsFullResync = false;
-        console.log('[FULL SYNC SENT/APPLIED]', dc._remotePeerId || 'pending');
+      } catch {
+        /* ignore */
+      }
+    } else if (P2PAgents.isLeader && openPeerId && meshTakePeerNeedsResync(openPeerId)) {
+      try {
+        pushFullStateOnDataChannel(dc);
       } catch {
         /* ignore */
       }
@@ -3416,26 +3446,26 @@ function setupDataChannel(dc, remoteKey, pc = null) {
   dc.onmessage = async e => {
     const remoteId = dc._remotePeerId || '?';
     if (typeof e.data === 'string') {
-      console.log('[RECV]', remoteId, e.data.length);
+      meshLogRecv(remoteId, e.data.length);
     } else if (e.data && typeof e.data === 'object' && typeof e.data.byteLength === 'number') {
-      console.log('[RECV]', remoteId, e.data.byteLength);
+      meshLogRecv(remoteId, e.data.byteLength);
     } else {
-      console.log('[RECV]', remoteId, 0);
+      meshLogRecv(remoteId, 0);
     }
     let raw;
     try {
       raw = JSON.parse(e.data);
     } catch {
-      console.log('[DROP]', 'json_parse_failed');
+      meshLogDrop('json_parse_failed');
       return;
     }
     const msg = normalizeIncomingMessage(raw);
     if (!msg || !msg.type) {
       dbgP2P('RECV malformed', raw);
-      console.log('[DROP]', 'normalize_failed');
+      meshLogDrop('normalize_failed');
       return;
     }
-    console.log('[PARSED FRAME]', msg.type);
+    meshLogParsed(msg.type);
     dbgP2P('RECV <-', msg.type, { id: msg.id || null, from: msg.from || null });
     // Generic ACK for all envelope messages with ids (except ACK itself).
     if (msg.id && msg.type !== 'ack') {
@@ -3485,7 +3515,7 @@ async function handleMessage(msg, dc) {
   const fromLeaderOnly = new Set(['subtask', 'request_continue', 'heartbeat']);
   if (remotePeerId && fromLeaderOnly.has(msg?.type)) {
     if (P2PAgents.leaderId && remotePeerId !== P2PAgents.leaderId) {
-      console.log('[DROP]', `unauthorized_${msg.type}_not_leader`);
+      meshLogDrop(`unauthorized_${msg.type}_not_leader`);
       log(`Rejected unauthorized ${msg.type} from ${String(remotePeerId).slice(0, 8)}…`);
       return;
     }
@@ -3593,11 +3623,18 @@ async function handleMessage(msg, dc) {
     case 'state': {
       const st = msg.state;
       if (!st || typeof st !== 'object') {
-        console.log('[DROP]', 'state_missing_payload');
+        meshLogDrop('state_missing_payload');
         break;
       }
-      console.log('[APPLY]', remotePeerId || '?', JSON.stringify(st).length);
-      mergeIncomingState(st, { fromPeerId: remotePeerId || null });
+      const mergeOpts = { fromPeerId: remotePeerId || null };
+      if (forceFirstStateAfterReconnect) {
+        mergeOpts.fullSnapshot = true;
+        mergeOpts.forceAcceptRemote = true;
+        forceFirstStateAfterReconnect = false;
+        meshLogFullSyncApplied(remotePeerId || '?');
+      }
+      meshLogApply(remotePeerId || '?', JSON.stringify(st).length);
+      mergeIncomingState(st, mergeOpts);
       break;
     }
     case 'token':

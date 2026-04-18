@@ -2,6 +2,18 @@
  * Shared-state merge helpers for P2P sync (star topology + versioned doc).
  */
 
+/**
+ * Whether incoming remote fields should win over local when versions tie or skew.
+ * Full snapshots (post-reconnect / host relay) must merge even if local.version is higher.
+ */
+export function shouldPreferRemoteMerge(localVersion, remoteVersion, opts = {}) {
+  const force = opts.forceAcceptRemote === true || opts.fullSnapshot === true;
+  if (force) return true;
+  const loc = Number(localVersion) || 0;
+  const rem = Number(remoteVersion) || 0;
+  return rem >= loc;
+}
+
 export function cloneLlmChatShape(raw) {
   if (!raw || typeof raw !== 'object') {
     return { busy: false, runPeerId: null, streamPartial: '', items: [] };

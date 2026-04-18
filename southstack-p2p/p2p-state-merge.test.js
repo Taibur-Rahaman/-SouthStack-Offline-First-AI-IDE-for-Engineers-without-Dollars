@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { mergeLlmChatItems } from './p2p-state-merge.js';
+import { mergeLlmChatItems, shouldPreferRemoteMerge } from './p2p-state-merge.js';
+
+describe('shouldPreferRemoteMerge', () => {
+  it('prefers remote when versions are lower but fullSnapshot is set (reconnect skew)', () => {
+    expect(shouldPreferRemoteMerge(100, 1, { fullSnapshot: true })).toBe(true);
+    expect(shouldPreferRemoteMerge(100, 1, { forceAcceptRemote: true })).toBe(true);
+  });
+
+  it('uses version order when not forcing', () => {
+    expect(shouldPreferRemoteMerge(5, 10, {})).toBe(true);
+    expect(shouldPreferRemoteMerge(10, 5, {})).toBe(false);
+    expect(shouldPreferRemoteMerge(7, 7, {})).toBe(true);
+  });
+});
 
 describe('mergeLlmChatItems', () => {
   it('keeps guest message when host version is higher (star relay)', () => {
