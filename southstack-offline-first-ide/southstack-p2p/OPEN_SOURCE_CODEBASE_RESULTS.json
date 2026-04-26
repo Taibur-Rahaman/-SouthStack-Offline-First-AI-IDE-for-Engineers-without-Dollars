@@ -1,0 +1,133 @@
+{
+  "target_repo": "external/redis",
+  "file_count": 895,
+  "scenarios": [
+    {
+      "target_lines": 10000,
+      "actual_lines": 10168,
+      "actual_chars": 387647,
+      "used_files": 32,
+      "augmented": false,
+      "chunks": 65,
+      "chunk_ms": 0.55,
+      "route_ms": 0.09,
+      "sample_route": [
+        {
+          "id": 0,
+          "peer": "host",
+          "size": 6000
+        },
+        {
+          "id": 1,
+          "peer": "peer-1",
+          "size": 6000
+        },
+        {
+          "id": 2,
+          "peer": "peer-2",
+          "size": 6000
+        },
+        {
+          "id": 3,
+          "peer": "host",
+          "size": 6000
+        },
+        {
+          "id": 4,
+          "peer": "peer-1",
+          "size": 6000
+        },
+        {
+          "id": 5,
+          "peer": "peer-2",
+          "size": 6000
+        }
+      ]
+    },
+    {
+      "target_lines": 50000,
+      "actual_lines": 53923,
+      "actual_chars": 1777417,
+      "used_files": 242,
+      "augmented": false,
+      "chunks": 299,
+      "chunk_ms": 4.81,
+      "route_ms": 0.03,
+      "sample_route": [
+        {
+          "id": 0,
+          "peer": "host",
+          "size": 6000
+        },
+        {
+          "id": 1,
+          "peer": "peer-1",
+          "size": 6000
+        },
+        {
+          "id": 2,
+          "peer": "peer-2",
+          "size": 6000
+        },
+        {
+          "id": 3,
+          "peer": "host",
+          "size": 6000
+        },
+        {
+          "id": 4,
+          "peer": "peer-1",
+          "size": 6000
+        },
+        {
+          "id": 5,
+          "peer": "peer-2",
+          "size": 6000
+        }
+      ]
+    },
+    {
+      "target_lines": 500000,
+      "actual_lines": 721814,
+      "actual_chars": 26049709,
+      "used_files": 895,
+      "augmented": true,
+      "chunks": 4351,
+      "chunk_ms": 55.91,
+      "route_ms": 1.12,
+      "sample_route": [
+        {
+          "id": 0,
+          "peer": "host",
+          "size": 6000
+        },
+        {
+          "id": 1,
+          "peer": "peer-1",
+          "size": 6000
+        },
+        {
+          "id": 2,
+          "peer": "peer-2",
+          "size": 6000
+        },
+        {
+          "id": 3,
+          "peer": "host",
+          "size": 6000
+        },
+        {
+          "id": 4,
+          "peer": "peer-1",
+          "size": 6000
+        },
+        {
+          "id": 5,
+          "peer": "peer-2",
+          "size": 6000
+        }
+      ]
+    }
+  ],
+  "generated_at": "2026-03-30T16:44:49.568Z"
+}

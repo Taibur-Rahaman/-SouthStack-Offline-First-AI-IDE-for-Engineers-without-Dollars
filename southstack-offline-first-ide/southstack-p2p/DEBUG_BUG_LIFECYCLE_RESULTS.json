@@ -1,0 +1,29 @@
+{
+  "pass": true,
+  "issue": "failing test in command parser under concurrent input",
+  "stage_count": 4,
+  "stages": [
+    {
+      "stage": "reproduce",
+      "owner": "peer-1",
+      "output": "Reproduced: failing test in command parser under concurrent input"
+    },
+    {
+      "stage": "analyze",
+      "owner": "peer-2",
+      "output": "Root cause: missing null check in parser"
+    },
+    {
+      "stage": "patch",
+      "owner": "peer-1",
+      "output": "Patch: add guard + unit-safe fallback branch"
+    },
+    {
+      "stage": "verify",
+      "owner": "peer-2",
+      "output": "Regression checks: 6 pass, 0 fail"
+    }
+  ],
+  "merged_output": "[reproduce@peer-1] Reproduced: failing test in command parser under concurrent input\n[analyze@peer-2] Root cause: missing null check in parser\n[patch@peer-1] Patch: add guard + unit-safe fallback branch\n[verify@peer-2] Regression checks: 6 pass, 0 fail",
+  "generated_at": "2026-03-30T16:45:28.084Z"
+}

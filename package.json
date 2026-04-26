@@ -1,0 +1,32 @@
+{
+  "name": "your-project-name",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "vitest",
+    "test:ui-builder": "cd ui-builder-p2p && npm run test",
+    "ci:ui-builder": "cd ui-builder-p2p && npm run test:ci",
+    "ui-builder:dev": "vite --config ui-builder-p2p/vite.config.ts",
+    "ui-builder:signal": "node ui-builder-p2p/server/signaling-server.mjs",
+    "ui-builder:api": "node ui-builder-p2p/server/image-to-ui-api.mjs",
+    "ui-builder:build": "vite build --config ui-builder-p2p/vite.config.ts",
+    "ui-builder:all": "cd ui-builder-p2p && npm run start:all",
+    "system:verify": "npm run system:verify --prefix ui-builder-p2p",
+    "system:diagnostics": "npm run system:diagnostics --prefix ui-builder-p2p",
+    "system:benchmark": "npm run system:benchmark --prefix ui-builder-p2p",
+    "run-debug": "node southstack-p2p/tools/run_debug_distributed.mjs",
+    "start": "npm run ui-builder:all",
+    "start:legacy": "cd southstack-p2p && python3 serve_universal.py"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "jsdom": "^29.0.1",
+    "playwright": "^1.58.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^4.1.2"
+  },
+  "dependencies": {
+    "lodash": "^4.17.23",
+    "lucide-react": "^1.11.0"
+  }
+}

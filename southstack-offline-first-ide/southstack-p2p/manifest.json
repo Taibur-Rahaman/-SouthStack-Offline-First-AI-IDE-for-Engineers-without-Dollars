@@ -1,0 +1,16 @@
+{
+  "name": "SouthStack — Team coding",
+  "short_name": "SouthStack",
+  "description": "Code together across devices with a simple room link",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#007AFF",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHRleHQgeT0iNzUiIGZvbnQtc2l6ZT0iNzUiIGZpbGw9IiMwMDdBRkYiPtKUPC90ZXh0Pjwvc3ZnPg==",
+      "sizes": "100x100",
+      "type": "image/svg+xml"
+    }
+  ]
+}

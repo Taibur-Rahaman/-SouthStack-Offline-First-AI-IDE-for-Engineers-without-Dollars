@@ -1,0 +1,180 @@
+{
+  "pass": true,
+  "source": "synthetic",
+  "source_repo": null,
+  "scenarios": [
+    {
+      "lines": 10000,
+      "buildMs": 34.412358,
+      "fileBased": {
+        "chunkMs": 0.1434899999999999,
+        "routeMs": 0.07081800000000271,
+        "chunks": 10,
+        "distribution": {
+          "byPeer": {
+            "peer-1": 4,
+            "peer-2": 3,
+            "peer-3": 3
+          },
+          "spread": 1,
+          "efficient": true
+        },
+        "accuracy": {
+          "bugPatternHits": 10,
+          "totalChunks": 10,
+          "accuracyScore": 1
+        }
+      },
+      "functionBased": {
+        "chunkMs": 2.1966830000000073,
+        "routeMs": 0.24717699999999354,
+        "chunks": 2000,
+        "distribution": {
+          "byPeer": {
+            "peer-1": 667,
+            "peer-2": 667,
+            "peer-3": 666
+          },
+          "spread": 1,
+          "efficient": true
+        },
+        "accuracy": {
+          "bugPatternHits": 1990,
+          "totalChunks": 2000,
+          "accuracyScore": 0.995
+        }
+      },
+      "totalMs": 37.070526
+    },
+    {
+      "lines": 50000,
+      "buildMs": 162.931149,
+      "fileBased": {
+        "chunkMs": 0.019872999999961394,
+        "routeMs": 0.008555999999998676,
+        "chunks": 50,
+        "distribution": {
+          "byPeer": {
+            "peer-1": 17,
+            "peer-2": 17,
+            "peer-3": 16
+          },
+          "spread": 1,
+          "efficient": true
+        },
+        "accuracy": {
+          "bugPatternHits": 50,
+          "totalChunks": 50,
+          "accuracyScore": 1
+        }
+      },
+      "functionBased": {
+        "chunkMs": 5.244641999999999,
+        "routeMs": 3.357114000000024,
+        "chunks": 10000,
+        "distribution": {
+          "byPeer": {
+            "peer-1": 3334,
+            "peer-2": 3333,
+            "peer-3": 3333
+          },
+          "spread": 1,
+          "efficient": true
+        },
+        "accuracy": {
+          "bugPatternHits": 9950,
+          "totalChunks": 10000,
+          "accuracyScore": 0.995
+        }
+      },
+      "totalMs": 171.561334
+    },
+    {
+      "lines": 100000,
+      "buildMs": 383.52819100000005,
+      "fileBased": {
+        "chunkMs": 0.020104999999944084,
+        "routeMs": 0.016220999999973174,
+        "chunks": 100,
+        "distribution": {
+          "byPeer": {
+            "peer-1": 34,
+            "peer-2": 33,
+            "peer-3": 33
+          },
+          "spread": 1,
+          "efficient": true
+        },
+        "accuracy": {
+          "bugPatternHits": 100,
+          "totalChunks": 100,
+          "accuracyScore": 1
+        }
+      },
+      "functionBased": {
+        "chunkMs": 7.5002750000001015,
+        "routeMs": 7.592284999999947,
+        "chunks": 20000,
+        "distribution": {
+          "byPeer": {
+            "peer-1": 6667,
+            "peer-2": 6667,
+            "peer-3": 6666
+          },
+          "spread": 1,
+          "efficient": true
+        },
+        "accuracy": {
+          "bugPatternHits": 19900,
+          "totalChunks": 20000,
+          "accuracyScore": 0.995
+        }
+      },
+      "totalMs": 398.657077
+    },
+    {
+      "lines": 500000,
+      "buildMs": 2392.442191,
+      "fileBased": {
+        "chunkMs": 0.11578499999995984,
+        "routeMs": 0.0966960000000654,
+        "chunks": 500,
+        "distribution": {
+          "byPeer": {
+            "peer-1": 167,
+            "peer-2": 167,
+            "peer-3": 166
+          },
+          "spread": 1,
+          "efficient": true
+        },
+        "accuracy": {
+          "bugPatternHits": 500,
+          "totalChunks": 500,
+          "accuracyScore": 1
+        }
+      },
+      "functionBased": {
+        "chunkMs": 43.96212999999989,
+        "routeMs": 200.4841510000001,
+        "chunks": 100000,
+        "distribution": {
+          "byPeer": {
+            "peer-1": 33334,
+            "peer-2": 33333,
+            "peer-3": 33333
+          },
+          "spread": 1,
+          "efficient": true
+        },
+        "accuracy": {
+          "bugPatternHits": 99500,
+          "totalChunks": 100000,
+          "accuracyScore": 0.995
+        }
+      },
+      "totalMs": 2637.100953
+    }
+  ],
+  "generated_at": "2026-03-30T21:21:04.426Z"
+}

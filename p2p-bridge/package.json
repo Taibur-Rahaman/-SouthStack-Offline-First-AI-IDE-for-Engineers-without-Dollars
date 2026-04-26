@@ -1,0 +1,11 @@
+{
+  "name": "p2p-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "relay": "node relay.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
